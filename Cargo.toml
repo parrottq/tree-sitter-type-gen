@@ -1,0 +1,9 @@
+[package]
+name = "tree-sitter-type-gen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+convert_case = "0.6.0"
+tree-sitter-rust = "0.20.3"
+treeedbgen = "0.1.0-rc.5"
