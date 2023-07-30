@@ -1,20 +1,21 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt::Write,
+    fmt::{Debug, Write},
+    hash::Hash,
 };
 
 use convert_case::{Case, Casing};
+use treeedbgen::{Node, Subtype};
+
+use crate::structures::{Container, Enum, Struct, TyConstuctor, TyDefinition, TyName};
+
+mod structures;
 
 fn rename_type(ty_name: &str) -> String {
     match ty_name {
         "_" => "Base".into(),
         _ => ty_name.from_case(Case::Snake).to_case(Case::Pascal),
     }
-}
-
-enum Lazy<'a, const N: usize> {
-    Unparsed(&'a ()),
-    Parsed([(); N]),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -85,11 +86,106 @@ struct Field {
 
 impl Field {
     fn compound_ty(&self) -> String {
-        self.wrapper.wrap_ty(self.field_ty.as_str())
+        self.wrapper
+            .wrap_ty(&format!("{}<'a>", self.field_ty.as_str()))
     }
 
     fn cast_ty(&self, src: &str) -> String {
         self.wrapper.cast_wrapper(src, &self.field_ty)
+    }
+}
+
+enum BuildTypeResult<T> {
+    DeferUntilPresent(TyName),
+    DeclareFirst { defer_ty_name: TyName, append: T },
+    Error(String),
+}
+
+fn build_types_with_defer<T>(
+    definitions: &mut HashMap<TyName, TyDefinition>,
+    mut inputs: Vec<T>,
+    mut fun: impl FnMut(
+        &mut HashMap<TyName, TyDefinition>,
+        &T,
+    ) -> Result<TyDefinition, BuildTypeResult<T>>,
+) where
+    T: Debug,
+{
+    const DEBUG: bool = true;
+
+    let inputs_len = inputs.len();
+    let mut deferals: HashMap<TyName, Vec<T>> = Default::default();
+    let mut errors = vec![];
+
+    while let Some(input) = inputs.pop() {
+        if DEBUG {
+            println!(
+                "// deferals({}) errors({}) inputs({})",
+                deferals.len(),
+                errors.len(),
+                inputs.len()
+            );
+        }
+
+        match fun(definitions, &input) {
+            Ok(ty_def) => {
+                if DEBUG {
+                    println!("// Ok");
+                }
+                let ty_name = ty_def.name();
+
+                if let Some(deferals) = deferals.remove(&ty_name) {
+                    inputs.extend(deferals)
+                }
+
+                let res = definitions.insert(ty_name, ty_def);
+                assert!(res.is_none());
+            }
+            Err(BuildTypeResult::DeferUntilPresent(defer_ty_name)) => {
+                if DEBUG {
+                    println!("// Defer {defer_ty_name}");
+                }
+                deferals
+                    .entry(defer_ty_name)
+                    .or_insert_with(|| Default::default())
+                    .push(input);
+            }
+            Err(BuildTypeResult::DeclareFirst {
+                append: new_declaration,
+                defer_ty_name,
+            }) => {
+                if DEBUG {
+                    println!("// First {new_declaration:?}");
+                }
+                inputs.push(new_declaration);
+                deferals
+                    .entry(defer_ty_name)
+                    .or_insert_with(|| Default::default())
+                    .push(input);
+            }
+            Err(BuildTypeResult::Error(err)) => {
+                if DEBUG {
+                    println!("// Error {err}");
+                };
+                errors.push(err)
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        dbg!(&errors);
+        panic!(
+            "Errors while processing types total({inputs_len}) errors({})",
+            errors.len()
+        );
+    }
+
+    if !deferals.is_empty() {
+        dbg!(deferals.keys().collect::<Vec<_>>());
+        panic!(
+            "Not all declarations processed total({inputs_len}) left({})",
+            deferals.len()
+        );
     }
 }
 
@@ -132,75 +228,148 @@ fn main() {
     ty_rename_table.insert_rename("^=".into(), "AssignXor".into());
     ty_rename_table.insert_rename("|=".into(), "AssignOr".into());
 
+    #[derive(Debug)]
+    enum Input {
+        Node(Node),
+        FieldValues {
+            name: TyName,
+            subtypes: Vec<(String, bool)>,
+        },
+    }
+
     let nodes = treeedbgen::nodes(tree_sitter_rust::NODE_TYPES).unwrap();
-    for node in nodes.into_iter().filter(|node| node.named) {
-        let ty_name = ty_rename_table.rename(&node.ty);
-        // let ty_name = ty_rename_table
-        //     .entry(node.ty.clone())
-        //     .or_insert_with(|| rename_type(&node.ty).into());
+    let nodes: Vec<_> = nodes
+        .into_iter()
+        .filter(|x| x.named)
+        .map(Input::Node)
+        .collect();
 
-        if node.subtypes.len() > 0 {
-            assert_eq!(node.fields.len(), 0);
-            let mut output = String::new();
-            let f = &mut output;
-            let mut lifetime = false;
-            for subtype in &node.subtypes {
-                let sub_ty_name = ty_rename_table.rename(&subtype.ty);
-                writeln!(f, "    /// '{}' renamed to '{}'", subtype.ty, sub_ty_name).unwrap();
-                if subtype.named {
-                    lifetime = true;
-                    writeln!(f, "    {}({}<'a>),", sub_ty_name, sub_ty_name).unwrap();
-                } else {
-                    writeln!(f, "    {},", sub_ty_name).unwrap();
+    let mut declarations: HashMap<TyName, TyDefinition> = HashMap::with_capacity(nodes.len());
+
+    build_types_with_defer(&mut declarations, nodes, |declarations, input| {
+        match input {
+            Input::FieldValues { name, subtypes } => {
+                println!("// Processing field '{name}'");
+                // let mut enum_def = String::new();
+                // let f = &mut enum_def;
+
+                let mut variants = HashMap::new();
+                for (ty, named) in subtypes {
+                    let sub_ty_name = ty_rename_table.rename(&ty);
+                    let sub_ty_name = TyName::new(sub_ty_name);
+
+                    if *named {
+                        let variant_ty_const = TyConstuctor {
+                            name: sub_ty_name.clone(),
+                            lifetime_parma: vec![],
+                        }; //variant.ty_constructor();
+                        let res =
+                            variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
+                        assert!(res.is_none());
+                        // writeln!(f, "    {}({}<'a>),", sub_ty_name, sub_ty_name).unwrap();
+                    } else {
+                        let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
+                        assert!(res.is_none());
+                        // writeln!(f, "    {},", sub_ty_name).unwrap();
+                    }
                 }
+                // writeln!(f, "}}").unwrap();
+
+                // writeln!(
+                //     &mut defered_def,
+                //     "enum {}<'a> {{\n{enum_def}",
+                //     name,
+                //     // if lifetime { "<'a>" } else { "" }
+                // )
+                // .unwrap();
+
+                // Err(BuildTypeResult::Error(format!(
+                //     "Field values subtype not implemented"
+                // )));
+
+                Ok(Enum {
+                    name: name.clone(),
+                    variants,
+                }
+                .into())
             }
+            Input::Node(node) => {
+                let ty_name = ty_rename_table.rename(&node.ty);
+                println!("// Processing '{ty_name}' '{}'", node.ty);
+                // dbg!(node);
+                // let ty_name = ty_rename_table
+                //     .entry(node.ty.clone())
+                //     .or_insert_with(|| rename_type(&node.ty).into());
 
-            println!("enum {}{} {{", ty_name, if lifetime { "<'a>" } else { "" });
-            println!("{output}}}");
-        } else {
-            if node.fields.len() > 0 {
-                println!("struct {}<'a>(Node<'a>);", ty_name);
-                println!("impl<'a> Deref for {}<'a> {{ type Target = Node<'a>; fn deref(&self) -> &Self::Target {{ &self.0 }} }}", ty_name);
+                if node.subtypes.len() > 0 {
+                    assert_eq!(node.fields.len(), 0);
+                    // let mut output = String::new();
+                    // let f = &mut output;
+                    let mut variants = HashMap::with_capacity(node.subtypes.len());
 
-                let mut defered_def = String::new();
-                // println!("impl<'a> {}<'a> {{", ty_name);
-                // println!("}}");
+                    for subtype in &node.subtypes {
+                        let sub_ty_name = TyName::new(ty_rename_table.rename(&subtype.ty));
+                        // writeln!(f, "    /// '{}' renamed to '{}'", subtype.ty, sub_ty_name).unwrap();
+                        if subtype.named {
+                            // let variant = declarations.get(&sub_ty_name).ok_or_else(|| {
+                            //     BuildTypeResult::DeferUntilPresent(sub_ty_name.clone())
+                            // })?;
+                            let variant_ty_const = TyConstuctor {
+                                name: sub_ty_name.clone(),
+                                lifetime_parma: vec![],
+                            }; //variant.ty_constructor();
+                            let res = variants
+                                .insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
+                            assert!(res.is_none());
+                            // writeln!(f, "    {}({}<'a>),", sub_ty_name, sub_ty_name).unwrap();
+                        } else {
+                            let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
+                            assert!(res.is_none());
+                            // writeln!(f, "    {},", sub_ty_name).unwrap();
+                        }
+                    }
 
-                let fields: Vec<_> = node
-                    .fields
-                    .iter()
-                    .map(|(field_name, field)| {
-                        let field_type = match field.types.as_slice() {
+                    // println!("enum {}<'a> {{", ty_name);
+                    // println!("enum {}{} {{", ty_name, if lifetime { "<'a>" } else { "" });
+                    // println!("{output}}}");
+                    return Ok(Enum {
+                        name: TyName::new(ty_name),
+                        variants,
+                    }
+                    .into());
+                }
+
+                if node.fields.len() > 0 {
+                    // println!("struct {}<'a>(Node<'a>);", ty_name);
+
+                    let mut defered_def = String::new();
+                    // println!("impl<'a> {}<'a> {{", ty_name);
+                    // println!("}}");
+                    let mut fields: Vec<_> = Vec::with_capacity(node.fields.len());
+
+                    for (field_name, field) in &node.fields {
+                        let field_ty = match field.types.as_slice() {
                             [] => "()".to_string(),
                             [single_type] => ty_rename_table.rename(&single_type.ty),
                             types => {
                                 let name = format!("{}_{}", ty_name, field_name);
 
-                                let mut enum_def = String::new();
-                                let f = &mut enum_def;
-
-                                let mut lifetime = false;
-                                for subtype in types {
-                                    let sub_ty_name = ty_rename_table.rename(&subtype.ty);
-                                    if subtype.named {
-                                        lifetime = true;
-                                        writeln!(f, "    {}({}<'a>),", sub_ty_name, sub_ty_name)
-                                            .unwrap();
-                                    } else {
-                                        writeln!(f, "    {},", sub_ty_name).unwrap();
-                                    }
+                                let sub_ty_name = TyName::new(name.clone());
+                                if let Some(ty_def) = declarations.get(&sub_ty_name) {
+                                    ty_def.ty_constructor().name.to_string() // TODO: Pass TyConst to fields instead
+                                } else {
+                                    // dbg!(declarations.keys().collect::<Vec<_>>());
+                                    return Err(BuildTypeResult::DeclareFirst {
+                                        defer_ty_name: sub_ty_name.clone(),
+                                        append: Input::FieldValues {
+                                            name: sub_ty_name,
+                                            subtypes: types
+                                                .iter()
+                                                .map(|x| (x.ty.clone(), x.named))
+                                                .collect(),
+                                        },
+                                    });
                                 }
-                                writeln!(f, "}}").unwrap();
-
-                                writeln!(
-                                    &mut defered_def,
-                                    "enum {}{} {{{enum_def}",
-                                    name,
-                                    if lifetime { "<'a>" } else { "" }
-                                )
-                                .unwrap();
-
-                                name
                             }
                         };
 
@@ -213,55 +382,73 @@ fn main() {
                                 FieldType::Optional
                             }
                         };
-                        Field {
+
+                        fields.push(Field {
                             wrapper,
                             field_name: field_name.clone(),
-                            field_ty: field_type,
-                        }
-                    })
-                    .collect();
+                            field_ty,
+                        });
+                    }
 
-                let field_ty_name = format!("{ty_name}Fields");
-                println!("impl<'a> {}<'a> {{", ty_name);
-                for (i, field) in fields.iter().enumerate() {
-                    // println!(
-                    //     "    pub fn fields(&self) -> {} {{ {} }}",
-                    //     field_ty_name,
-                    //     field.cast_ty(&format!("self.{i}"))
-                    // );
+                    let field_ty_name = format!("{ty_name}Fields");
+                    println!("impl<'a> {}<'a> {{", ty_name);
+                    for (i, field) in fields.iter().enumerate() {
+                        // println!(
+                        //     "    pub fn fields(&self) -> {} {{ {} }}",
+                        //     field_ty_name,
+                        //     field.cast_ty(&format!("self.{i}"))
+                        // );
+                    }
+                    println!("}}");
+
+                    if !defered_def.is_empty() {
+                        println!("{defered_def}");
+                    }
+
+                    println!("struct {}<'a>(", field_ty_name);
+                    for field in fields.iter() {
+                        println!("    {},", field.compound_ty())
+                    }
+                    println!(");");
+
+                    println!("impl<'a> {}<'a> {{", field_ty_name);
+                    for (i, field) in fields.iter().enumerate() {
+                        println!(
+                            "    pub fn {}_node(&self) -> {} {{ self.{i}.clone() }}",
+                            field.field_name,
+                            field.wrapper.wrap_ty("Node<'a>")
+                        );
+                        println!(
+                            "    pub fn {}(&self) -> {} {{ self.{i}.clone() }}",
+                            function_rename_table.rename(&field.field_name),
+                            field.compound_ty(),
+                            // field.cast_ty(&format!("self.{i}"))
+                        );
+                    }
+                    println!("}}");
+                } else {
+                    // println!("struct {}<'a>(Node<'a>);", ty_name);
                 }
-                println!("}}");
 
-                if !defered_def.is_empty() {
-                    println!("{defered_def}");
-                }
-
-                println!("struct {}<'a>(", field_ty_name);
-                for field in fields.iter() {
-                    println!("    {},", field.compound_ty())
-                }
-                println!(");");
-
-                println!("impl<'a> {}<'a> {{", field_ty_name);
-                for (i, field) in fields.iter().enumerate() {
-                    println!(
-                        "    pub fn {}_node(&self) -> {} {{ self.{i}.clone() }}",
-                        field.field_name,
-                        field.wrapper.wrap_ty("Node<'a>")
-                    );
-                    println!(
-                        "    pub fn {}(&self) -> {} {{ {} }}",
-                        function_rename_table.rename(&field.field_name),
-                        field.compound_ty(),
-                        field.cast_ty(&format!("self.{i}"))
-                    );
-                }
-                println!("}}");
-
-            } else {
-                println!("struct {}<'a>(Node<'a>);", ty_name);
                 println!("impl<'a> Deref for {ty_name}<'a> {{ type Target = Node<'a>; fn deref(&self) -> &Self::Target {{ &self.0 }} }}");
+
+                let node_ty = TyConstuctor {
+                    name: TyName::new("Node".into()),
+                    lifetime_parma: vec!["a".into()],
+                };
+
+                Ok(Struct {
+                    name: TyName::new(ty_name),
+                    contents: Container::Tuple(vec![node_ty]),
+                }
+                .into())
             }
         }
+        // Err(BuildTypeResult::DeferUntilPresent(TyName::new(ty_name)))
+    });
+
+    for (ty_name, ty_def) in declarations {
+        println!("/// {}", ty_name);
+        println!("{}", ty_def);
     }
 }
