@@ -338,7 +338,9 @@ fn main() {
                     // println!("}}");
                     let mut fields: Vec<_> = Vec::with_capacity(node.fields.len());
 
-                    for (field_name, field) in &node.fields {
+                    let mut pre_fields = node.fields.iter().collect::<Vec<_>>();
+                    pre_fields.sort_by_key(|x| x.0);
+                    for (field_name, field) in pre_fields {
                         let field_ty = match field.types.as_slice() {
                             [] => "()".to_string(),
                             [single_type] => ty_rename_table.rename(&single_type.ty),

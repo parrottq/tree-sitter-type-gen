@@ -207,7 +207,9 @@ impl Enum<TyConstuctorIncomplete> {
 impl Display for Enum<TyConstuctor> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "pub enum {} {{", self.ty_constructor())?;
-        for (i, (ty_name, container)) in self.variants.iter().enumerate() {
+        let mut variants = self.variants.iter().collect::<Vec<_>>();
+        variants.sort_by_key(|x| x.0);
+        for (i, (ty_name, container)) in variants.into_iter().enumerate() {
             writeln!(
                 f,
                 "    {}{}{}",
