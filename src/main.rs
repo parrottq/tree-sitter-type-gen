@@ -96,7 +96,6 @@ impl Field {
 }
 
 enum BuildTypeResult<T> {
-    DeferUntilPresent(TyName),
     DeclareFirst { defer_ty_name: TyName, append: T },
     Error(String),
 }
@@ -140,15 +139,6 @@ fn build_types_with_defer<T>(
 
                 let res = definitions.insert(ty_name, ty_def);
                 assert!(res.is_none());
-            }
-            Err(BuildTypeResult::DeferUntilPresent(defer_ty_name)) => {
-                if DEBUG {
-                    println!("// Defer {defer_ty_name}");
-                }
-                deferals
-                    .entry(defer_ty_name)
-                    .or_insert_with(|| Default::default())
-                    .push(input);
             }
             Err(BuildTypeResult::DeclareFirst {
                 append: new_declaration,
