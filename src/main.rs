@@ -250,10 +250,8 @@ fn main() {
                     let sub_ty_name = TyName::new(sub_ty_name);
 
                     if *named {
-                        let variant_ty_const = TyConstuctorIncomplete {
-                            name: sub_ty_name.clone(),
-                            lifetime_param: None,
-                        }; //variant.ty_constructor();
+                        let variant_ty_const =
+                            TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
                         let res =
                             variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
                         assert!(res.is_none());
@@ -305,10 +303,8 @@ fn main() {
                             // let variant = declarations.get(&sub_ty_name).ok_or_else(|| {
                             //     BuildTypeResult::DeferUntilPresent(sub_ty_name.clone())
                             // })?;
-                            let variant_ty_const = TyConstuctorIncomplete {
-                                name: sub_ty_name.clone(),
-                                lifetime_param: None,
-                            }; //variant.ty_constructor();
+                            let variant_ty_const =
+                                TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
                             let res = variants
                                 .insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
                             assert!(res.is_none());
@@ -425,10 +421,8 @@ fn main() {
 
                 println!("impl<'a> Deref for {ty_name}<'a> {{ type Target = Node<'a>; fn deref(&self) -> &Self::Target {{ &self.0 }} }}");
 
-                let node_ty = TyConstuctorIncomplete {
-                    name: TyName::new("Node".into()),
-                    lifetime_param: Some(vec!["a".into()]),
-                };
+                let node_ty =
+                    TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
 
                 Ok(Struct {
                     name: TyName::new(ty_name),
@@ -465,14 +459,14 @@ fn main() {
         };
 
         let ty_def = declarations_incomplete.get_mut(&ty_name).unwrap();
-        match ty_def.to_complete() {
+        match ty_def.into_completed() {
             Ok(completed) => {
                 declarations_incomplete.remove(&ty_name).unwrap();
                 declarations_completed.insert(ty_name.clone(), completed);
                 checking_stack.pop();
             }
             Err(incomplete_ty_def) => {
-                let next_ty_name = incomplete_ty_def.name.clone();
+                let next_ty_name = incomplete_ty_def.name().clone();
 
                 if let Some(e) = declarations_completed.get(&next_ty_name) {
                     incomplete_ty_def.lifetime_param = Some(e.ty_constructor().lifetime_param);

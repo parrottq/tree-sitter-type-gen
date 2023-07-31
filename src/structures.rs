@@ -42,12 +42,12 @@ impl TyDefinition<TyConstuctorIncomplete> {
         }
     }
 
-    pub fn to_complete(
+    pub fn into_completed(
         &mut self,
     ) -> Result<TyDefinition<TyConstuctor>, &mut TyConstuctorIncomplete> {
         match self {
-            TyDefinition::Struct(e) => e.to_complete().map(Into::into),
-            TyDefinition::Enum(e) => e.to_complete().map(Into::into),
+            TyDefinition::Struct(e) => e.into_completed().map(Into::into),
+            TyDefinition::Enum(e) => e.into_completed().map(Into::into),
         }
     }
 }
@@ -120,8 +120,8 @@ impl Struct<TyConstuctorIncomplete> {
         self.contents.next_incomplete_mut()
     }
 
-    pub fn to_complete(&mut self) -> Result<Struct<TyConstuctor>, &mut TyConstuctorIncomplete> {
-        self.contents.to_complete().map(|x| Struct {
+    pub fn into_completed(&mut self) -> Result<Struct<TyConstuctor>, &mut TyConstuctorIncomplete> {
+        self.contents.into_completed().map(|x| Struct {
             name: self.name.clone(),
             contents: x,
         })
@@ -191,10 +191,10 @@ impl Enum<TyConstuctorIncomplete> {
             .find_map(|x| x.next_incomplete_mut())
     }
 
-    pub fn to_complete(&mut self) -> Result<Enum<TyConstuctor>, &mut TyConstuctorIncomplete> {
+    pub fn into_completed(&mut self) -> Result<Enum<TyConstuctor>, &mut TyConstuctorIncomplete> {
         let mut variants = HashMap::with_capacity(self.variants.len());
         for (ty_name, container) in &mut self.variants {
-            let e = container.to_complete()?;
+            let e = container.into_completed()?;
             variants.insert(ty_name.clone(), e);
         }
         Ok(Enum {
@@ -248,37 +248,24 @@ impl Container<TyConstuctorIncomplete> {
         }
     }
 
-    pub fn to_complete(&mut self) -> Result<Container<TyConstuctor>, &mut TyConstuctorIncomplete> {
+    pub fn into_completed(
+        &mut self,
+    ) -> Result<Container<TyConstuctor>, &mut TyConstuctorIncomplete> {
         match self {
             Container::Tuple(e) => {
                 let mut l = Vec::with_capacity(e.len());
-                for e in e {
-                    match e.lifetime_param.as_ref() {
-                        Some(lifetime_param) => l.push(TyConstuctor {
-                            name: e.name.clone(),
-                            lifetime_param: lifetime_param.clone(),
-                        }),
-                        None => return Err(e),
-                    }
+                for incomplete_ty in e {
+                    l.push(incomplete_ty.into_complete().ok_or(incomplete_ty)?);
                 }
                 Ok(Container::Tuple(l))
             }
             Container::Named(e) => {
                 let mut l = HashMap::with_capacity(e.len());
-                for (name, ty) in e {
-                    let ty_name = ty.name.clone();
-                    match &ty.lifetime_param {
-                        Some(lifetime_param) => {
-                            l.insert(
-                                name.clone(),
-                                TyConstuctor {
-                                    name: ty_name,
-                                    lifetime_param: lifetime_param.clone(),
-                                },
-                            );
-                        }
-                        None => return Err(ty),
-                    }
+                for (ty_name, incomplete_ty) in e {
+                    l.insert(
+                        ty_name.clone(),
+                        incomplete_ty.into_complete().ok_or(incomplete_ty)?,
+                    );
                 }
                 Ok(Container::Named(l))
             }
@@ -330,6 +317,15 @@ pub struct TyConstuctor {
     pub lifetime_param: Vec<String>,
 }
 
+impl TyConstuctor {
+    pub fn new_simple(name: TyName, lifetime_param: Vec<String>) -> Self {
+        Self {
+            name,
+            lifetime_param,
+        }
+    }
+}
+
 impl Display for TyConstuctor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
@@ -354,8 +350,35 @@ impl Display for TyConstuctor {
 
 #[derive(Debug, Clone)]
 pub struct TyConstuctorIncomplete {
-    pub name: TyName,
+    name: TyName,
     pub lifetime_param: Option<Vec<String>>,
+}
+
+impl TyConstuctorIncomplete {
+    pub fn new_simple(name: TyName) -> Self {
+        Self {
+            name,
+            lifetime_param: None,
+        }
+    }
+
+    pub fn into_complete(&self) -> Option<TyConstuctor> {
+        let lifetime_param = self.lifetime_param.as_ref()?.clone();
+        Some(TyConstuctor::new_simple(self.name.clone(), lifetime_param))
+    }
+
+    pub fn name(&self) -> &TyName {
+        &self.name
+    }
+}
+
+impl From<TyConstuctor> for TyConstuctorIncomplete {
+    fn from(value: TyConstuctor) -> Self {
+        Self {
+            name: value.name,
+            lifetime_param: Some(value.lifetime_param),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
