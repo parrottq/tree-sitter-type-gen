@@ -4,12 +4,11 @@ use std::{
 };
 
 use convert_case::{Case, Casing};
-use structures::TyConstuctorIncomplete;
-use treeedbgen::{Node, Subtype};
+use treeedbgen::Node;
 
-use crate::structures::{Container, Enum, Struct, TyConstuctor, TyDefinition, TyName};
+mod lang_gen;
 
-mod structures;
+use lang_gen::{Container, Enum, Struct, TyConstuctor, TyConstuctorIncomplete, TyName, TypeDef};
 
 fn rename_type(ty_name: &str) -> String {
     match ty_name {
@@ -63,12 +62,12 @@ enum BuildTypeResult<T> {
 }
 
 fn build_types_with_defer<T>(
-    definitions: &mut HashMap<TyName, TyDefinition<TyConstuctorIncomplete>>,
+    definitions: &mut HashMap<TyName, TypeDef<TyConstuctorIncomplete>>,
     mut inputs: Vec<T>,
     mut fun: impl FnMut(
-        &mut HashMap<TyName, TyDefinition<TyConstuctorIncomplete>>,
+        &mut HashMap<TyName, TypeDef<TyConstuctorIncomplete>>,
         &T,
-    ) -> Result<TyDefinition<TyConstuctorIncomplete>, BuildTypeResult<T>>,
+    ) -> Result<TypeDef<TyConstuctorIncomplete>, BuildTypeResult<T>>,
 ) where
     T: Debug,
 {
@@ -196,7 +195,7 @@ fn main() {
         .map(Input::Node)
         .collect();
 
-    let mut declarations: HashMap<TyName, TyDefinition<TyConstuctorIncomplete>> =
+    let mut declarations: HashMap<TyName, TypeDef<TyConstuctorIncomplete>> =
         HashMap::with_capacity(nodes.len());
 
     build_types_with_defer(&mut declarations, nodes, |declarations, input| {
@@ -391,7 +390,7 @@ fn main() {
     });
 
     let mut declarations_incomplete = declarations;
-    let mut declarations_completed: HashMap<TyName, TyDefinition<TyConstuctor>> =
+    let mut declarations_completed: HashMap<TyName, TypeDef<TyConstuctor>> =
         HashMap::with_capacity(declarations_incomplete.len());
     let mut checking_stack: Vec<TyName> = vec![];
 
