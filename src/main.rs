@@ -8,7 +8,10 @@ use treeedbgen::Node;
 
 mod lang_gen;
 
-use lang_gen::{Container, Enum, Struct, TyConstuctor, TyConstuctorIncomplete, TyName, TypeDef};
+use lang_gen::{
+    Container, Enum, Impl, ImplInstruction, Struct, TyConstuctor, TyConstuctorIncomplete, TyName,
+    TypeDef,
+};
 
 fn rename_type(ty_name: &str) -> String {
     match ty_name {
@@ -237,11 +240,13 @@ fn main() {
                 //     "Field values subtype not implemented"
                 // )));
 
-                Ok(Enum {
-                    name: name.clone(),
-                    variants,
-                }
-                .into())
+                Ok(TypeDef::new(
+                    Enum {
+                        name: name.clone(),
+                        variants,
+                    }
+                    .into(),
+                ))
             }
             Input::Node(node) => {
                 let ty_name = ty_rename_table.rename(&node.ty);
@@ -280,11 +285,13 @@ fn main() {
                     // println!("enum {}<'a> {{", ty_name);
                     // println!("enum {}{} {{", ty_name, if lifetime { "<'a>" } else { "" });
                     // println!("{output}}}");
-                    return Ok(Enum {
-                        name: TyName::new(ty_name),
-                        variants,
-                    }
-                    .into());
+                    return Ok(TypeDef::new(
+                        Enum {
+                            name: TyName::new(ty_name),
+                            variants,
+                        }
+                        .into(),
+                    ));
                 }
 
                 if node.fields.len() > 0 {
@@ -299,14 +306,14 @@ fn main() {
                     pre_fields.sort_by_key(|x| x.0);
                     for (field_name, field) in pre_fields {
                         let ty_name = match field.types.as_slice() {
-                            [] => "()".to_string(),
-                            [single_type] => ty_rename_table.rename(&single_type.ty),
+                            [] => TyName::new("()".to_string()),
+                            [single_type] => TyName::new(ty_rename_table.rename(&single_type.ty)),
                             types => {
                                 let name = format!("{}_{}", ty_name, field_name);
 
                                 let sub_ty_name = TyName::new(name.clone());
                                 if let Some(ty_def) = declarations.get(&sub_ty_name) {
-                                    ty_def.name().to_string() // TODO: Pass TyConst to fields instead
+                                    ty_def.name()
                                 } else {
                                     // dbg!(declarations.keys().collect::<Vec<_>>());
                                     return Err(BuildTypeResult::DeclareFirst {
@@ -324,16 +331,13 @@ fn main() {
                         };
 
                         let field_ty = if field.multiple {
-                            TyConstuctorIncomplete::new(
-                                ("Vec<".into(), TyName::new(ty_name), ">".into()),
-                                None,
-                            )
+                            TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), None)
                         } else {
                             if field.required {
-                                TyConstuctorIncomplete::new_simple(TyName::new(ty_name))
+                                TyConstuctorIncomplete::new_simple(ty_name)
                             } else {
                                 TyConstuctorIncomplete::new(
-                                    ("Option<".into(), TyName::new(ty_name), ">".into()),
+                                    ("Option<".into(), ty_name, ">".into()),
                                     None,
                                 )
                             }
@@ -365,28 +369,40 @@ fn main() {
 
                     let res = declarations.insert(
                         TyName::new(field_ty_name.clone()),
-                        Struct {
-                            name: TyName::new(field_ty_name.clone()),
-                            contents,
-                        }
-                        .into(),
+                        TypeDef::new(
+                            Struct {
+                                name: TyName::new(field_ty_name.clone()),
+                                contents,
+                            }
+                            .into(),
+                        ),
                     );
                     assert!(res.is_none());
                 }
 
-                println!("impl<'a> Deref for {ty_name}<'a> {{ type Target = Node<'a>; fn deref(&self) -> &Self::Target {{ &self.0 }} }}");
-
                 let node_ty =
-                    TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
+                    TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]);
 
-                Ok(Struct {
-                    name: TyName::new(ty_name),
-                    contents: Container::Tuple(vec![node_ty]),
-                }
-                .into())
+                let mut def = TypeDef::new(
+                    Struct {
+                        name: TyName::new(ty_name),
+                        contents: Container::Tuple(vec![node_ty.clone().into()]),
+                    }
+                    .into(),
+                );
+
+                let deref_parts = [
+                    "impl<'a> Deref for ".into(),
+                    ImplInstruction::SelfType,
+                    " { type Target = ".into(),
+                    ImplInstruction::TyConstructor(node_ty),
+                    "; fn deref(&self) -> &Self::Target { &self.0 } }".into(),
+                ];
+                def.push_impl(Impl::new(deref_parts.to_vec()));
+
+                Ok(def)
             }
         }
-        // Err(BuildTypeResult::DeferUntilPresent(TyName::new(ty_name)))
     });
 
     let mut declarations_incomplete = declarations;

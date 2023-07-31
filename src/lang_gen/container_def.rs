@@ -3,69 +3,71 @@ use std::fmt;
 use super::{Enum, Struct, TyConstuctor, TyConstuctorIncomplete, TyName};
 
 #[derive(Debug, Clone)]
-pub enum TypeDef<T> {
+pub enum ContainerDef<T> {
     Struct(Struct<T>),
     Enum(Enum<T>),
 }
 
-impl<T> TypeDef<T> {
+impl<T> ContainerDef<T> {
     pub fn name(&self) -> TyName {
         match self {
-            TypeDef::Struct(e) => e.name(),
-            TypeDef::Enum(e) => e.name(),
+            ContainerDef::Struct(e) => e.name(),
+            ContainerDef::Enum(e) => e.name(),
         }
     }
 }
 
-impl TypeDef<TyConstuctor> {
+impl ContainerDef<TyConstuctor> {
     pub fn ty_constructor(&self) -> TyConstuctor {
         match self {
-            TypeDef::Struct(e) => e.ty_constructor(),
-            TypeDef::Enum(e) => e.ty_constructor(),
+            ContainerDef::Struct(e) => e.ty_constructor(),
+            ContainerDef::Enum(e) => e.ty_constructor(),
         }
     }
 }
 
-impl TypeDef<TyConstuctorIncomplete> {
+impl ContainerDef<TyConstuctorIncomplete> {
     pub fn next_incomplete(&self) -> Option<&TyConstuctorIncomplete> {
         match self {
-            TypeDef::Struct(e) => e.next_incomplete(),
-            TypeDef::Enum(e) => e.next_incomplete(),
+            ContainerDef::Struct(e) => e.next_incomplete(),
+            ContainerDef::Enum(e) => e.next_incomplete(),
         }
     }
 
     pub fn next_incomplete_mut(&mut self) -> Option<&mut TyConstuctorIncomplete> {
         match self {
-            TypeDef::Struct(e) => e.next_incomplete_mut(),
-            TypeDef::Enum(e) => e.next_incomplete_mut(),
+            ContainerDef::Struct(e) => e.next_incomplete_mut(),
+            ContainerDef::Enum(e) => e.next_incomplete_mut(),
         }
     }
 
-    pub fn into_completed(&mut self) -> Result<TypeDef<TyConstuctor>, &mut TyConstuctorIncomplete> {
+    pub fn into_completed(
+        &mut self,
+    ) -> Result<ContainerDef<TyConstuctor>, &mut TyConstuctorIncomplete> {
         match self {
-            TypeDef::Struct(e) => e.into_completed().map(Into::into),
-            TypeDef::Enum(e) => e.into_completed().map(Into::into),
+            ContainerDef::Struct(e) => e.into_completed().map(Into::into),
+            ContainerDef::Enum(e) => e.into_completed().map(Into::into),
         }
     }
 }
 
-impl<T> From<Struct<T>> for TypeDef<T> {
+impl<T> From<Struct<T>> for ContainerDef<T> {
     fn from(value: Struct<T>) -> Self {
-        TypeDef::Struct(value)
+        ContainerDef::Struct(value)
     }
 }
 
-impl<T> From<Enum<T>> for TypeDef<T> {
+impl<T> From<Enum<T>> for ContainerDef<T> {
     fn from(value: Enum<T>) -> Self {
-        TypeDef::Enum(value)
+        ContainerDef::Enum(value)
     }
 }
 
-impl fmt::Display for TypeDef<TyConstuctor> {
+impl fmt::Display for ContainerDef<TyConstuctor> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeDef::Struct(e) => write!(f, "{}", e),
-            TypeDef::Enum(e) => write!(f, "{}", e),
+            ContainerDef::Struct(e) => write!(f, "{}", e),
+            ContainerDef::Enum(e) => write!(f, "{}", e),
         }
     }
 }

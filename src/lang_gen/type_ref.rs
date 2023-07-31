@@ -78,7 +78,7 @@ impl TyConstuctorIncomplete {
         }
     }
 
-    pub fn into_complete(&self) -> Option<TyConstuctor> {
+    pub fn into_completed(&self) -> Option<TyConstuctor> {
         let lifetime_param = self.lifetime_param.as_ref()?.clone();
         Some(TyConstuctor::new(self.parts.clone(), lifetime_param))
     }

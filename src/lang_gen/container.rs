@@ -30,7 +30,7 @@ impl Container<TyConstuctorIncomplete> {
             Container::Tuple(e) => {
                 let mut l = Vec::with_capacity(e.len());
                 for incomplete_ty in e {
-                    l.push(incomplete_ty.into_complete().ok_or(incomplete_ty)?);
+                    l.push(incomplete_ty.into_completed().ok_or(incomplete_ty)?);
                 }
                 Ok(Container::Tuple(l))
             }
@@ -39,7 +39,7 @@ impl Container<TyConstuctorIncomplete> {
                 for (ty_name, incomplete_ty) in e {
                     l.insert(
                         ty_name.clone(),
-                        incomplete_ty.into_complete().ok_or(incomplete_ty)?,
+                        incomplete_ty.into_completed().ok_or(incomplete_ty)?,
                     );
                 }
                 Ok(Container::Named(l))
