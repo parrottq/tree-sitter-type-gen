@@ -1,10 +1,10 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt::{Debug, Write},
-    hash::Hash,
+    fmt::Debug,
 };
 
 use convert_case::{Case, Casing};
+use structures::TyConstuctorIncomplete;
 use treeedbgen::{Node, Subtype};
 
 use crate::structures::{Container, Enum, Struct, TyConstuctor, TyDefinition, TyName};
@@ -102,12 +102,12 @@ enum BuildTypeResult<T> {
 }
 
 fn build_types_with_defer<T>(
-    definitions: &mut HashMap<TyName, TyDefinition>,
+    definitions: &mut HashMap<TyName, TyDefinition<TyConstuctorIncomplete>>,
     mut inputs: Vec<T>,
     mut fun: impl FnMut(
-        &mut HashMap<TyName, TyDefinition>,
+        &mut HashMap<TyName, TyDefinition<TyConstuctorIncomplete>>,
         &T,
-    ) -> Result<TyDefinition, BuildTypeResult<T>>,
+    ) -> Result<TyDefinition<TyConstuctorIncomplete>, BuildTypeResult<T>>,
 ) where
     T: Debug,
 {
@@ -244,7 +244,8 @@ fn main() {
         .map(Input::Node)
         .collect();
 
-    let mut declarations: HashMap<TyName, TyDefinition> = HashMap::with_capacity(nodes.len());
+    let mut declarations: HashMap<TyName, TyDefinition<TyConstuctorIncomplete>> =
+        HashMap::with_capacity(nodes.len());
 
     build_types_with_defer(&mut declarations, nodes, |declarations, input| {
         match input {
@@ -259,9 +260,9 @@ fn main() {
                     let sub_ty_name = TyName::new(sub_ty_name);
 
                     if *named {
-                        let variant_ty_const = TyConstuctor {
+                        let variant_ty_const = TyConstuctorIncomplete {
                             name: sub_ty_name.clone(),
-                            lifetime_parma: vec![],
+                            lifetime_param: None,
                         }; //variant.ty_constructor();
                         let res =
                             variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
@@ -314,9 +315,9 @@ fn main() {
                             // let variant = declarations.get(&sub_ty_name).ok_or_else(|| {
                             //     BuildTypeResult::DeferUntilPresent(sub_ty_name.clone())
                             // })?;
-                            let variant_ty_const = TyConstuctor {
+                            let variant_ty_const = TyConstuctorIncomplete {
                                 name: sub_ty_name.clone(),
-                                lifetime_parma: vec![],
+                                lifetime_param: None,
                             }; //variant.ty_constructor();
                             let res = variants
                                 .insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
@@ -356,7 +357,7 @@ fn main() {
 
                                 let sub_ty_name = TyName::new(name.clone());
                                 if let Some(ty_def) = declarations.get(&sub_ty_name) {
-                                    ty_def.ty_constructor().name.to_string() // TODO: Pass TyConst to fields instead
+                                    ty_def.name().to_string() // TODO: Pass TyConst to fields instead
                                 } else {
                                     // dbg!(declarations.keys().collect::<Vec<_>>());
                                     return Err(BuildTypeResult::DeclareFirst {
@@ -432,9 +433,9 @@ fn main() {
 
                 println!("impl<'a> Deref for {ty_name}<'a> {{ type Target = Node<'a>; fn deref(&self) -> &Self::Target {{ &self.0 }} }}");
 
-                let node_ty = TyConstuctor {
+                let node_ty = TyConstuctorIncomplete {
                     name: TyName::new("Node".into()),
-                    lifetime_parma: vec!["a".into()],
+                    lifetime_param: Some(vec!["a".into()]),
                 };
 
                 Ok(Struct {
@@ -447,8 +448,58 @@ fn main() {
         // Err(BuildTypeResult::DeferUntilPresent(TyName::new(ty_name)))
     });
 
-    for (ty_name, ty_def) in declarations {
+    let mut declarations_incomplete = declarations;
+    let mut declarations_completed: HashMap<TyName, TyDefinition<TyConstuctor>> =
+        HashMap::with_capacity(declarations_incomplete.len());
+    let mut checking_stack: Vec<TyName> = vec![];
+
+    loop {
+        let ty_name = match checking_stack.as_slice() {
+            [front @ .., ty_name] => {
+                if let Some(e) = front.iter().find(|x| ty_name.eq(x)) {
+                    todo!("Cycle found"); // TODO: Handle cycles
+                }
+
+                ty_name.clone()
+            }
+            [] => {
+                if let Some(ty_name) = declarations_incomplete.keys().next() {
+                    checking_stack.push(ty_name.clone());
+                    ty_name.clone()
+                } else {
+                    break;
+                }
+            }
+        };
+
+        let ty_def = declarations_incomplete.get_mut(&ty_name).unwrap();
+        match ty_def.to_complete() {
+            Ok(completed) => {
+                declarations_incomplete.remove(&ty_name).unwrap();
+                declarations_completed.insert(ty_name.clone(), completed);
+                checking_stack.pop();
+            }
+            Err(incomplete_ty_def) => {
+                let next_ty_name = incomplete_ty_def.name.clone();
+
+                if let Some(e) = declarations_completed.get(&next_ty_name) {
+                    incomplete_ty_def.lifetime_param = Some(e.ty_constructor().lifetime_param);
+                } else {
+                    checking_stack.push(declarations_incomplete.get(&next_ty_name).unwrap().name());
+                }
+            }
+        }
+    }
+
+    assert!(declarations_incomplete.is_empty());
+
+    let mut declare_keys = declarations_completed.keys().collect::<Vec<_>>();
+    declare_keys.sort();
+
+    for ty_name in declare_keys {
+        let ty_def = declarations_completed.get(ty_name).unwrap();
         println!("/// {}", ty_name);
         println!("{}", ty_def);
+        println!();
     }
 }
