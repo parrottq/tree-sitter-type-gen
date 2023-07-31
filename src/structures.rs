@@ -1,6 +1,7 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeSet, HashMap},
-    fmt::Display,
+    fmt::{self, Display},
 };
 
 #[derive(Debug, Clone)]
@@ -65,7 +66,7 @@ impl<T> From<Enum<T>> for TyDefinition<T> {
 }
 
 impl Display for TyDefinition<TyConstuctor> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TyDefinition::Struct(e) => write!(f, "{}", e),
             TyDefinition::Enum(e) => write!(f, "{}", e),
@@ -104,10 +105,7 @@ impl Struct<TyConstuctor> {
         let mut params = params.into_iter().collect::<Vec<_>>();
         params.sort();
 
-        TyConstuctor {
-            name: self.name(),
-            lifetime_param: params,
-        }
+        TyConstuctor::new_simple(self.name(), params)
     }
 }
 
@@ -129,7 +127,7 @@ impl Struct<TyConstuctorIncomplete> {
 }
 
 impl Display for Struct<TyConstuctor> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "pub struct {}", self.ty_constructor())?;
         let tail = match self.contents {
             Container::Tuple(_) => ";",
@@ -173,10 +171,7 @@ impl Enum<TyConstuctor> {
         let mut params = params.into_iter().collect::<Vec<_>>();
         params.sort();
 
-        TyConstuctor {
-            name: self.name(),
-            lifetime_param: params,
-        }
+        TyConstuctor::new_simple(self.name(), params)
     }
 }
 
@@ -205,7 +200,7 @@ impl Enum<TyConstuctorIncomplete> {
 }
 
 impl Display for Enum<TyConstuctor> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "pub enum {} {{", self.ty_constructor())?;
         let mut variants = self.variants.iter().collect::<Vec<_>>();
         variants.sort_by_key(|x| x.0);
@@ -274,7 +269,7 @@ impl Container<TyConstuctorIncomplete> {
 }
 
 impl<T: Display> Display for Container<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Container::Tuple(container) => {
                 if !container.is_empty() {
@@ -313,22 +308,29 @@ impl<T: Display> Display for Container<T> {
 
 #[derive(Debug, Clone)]
 pub struct TyConstuctor {
-    pub name: TyName,
+    parts: (Cow<'static, str>, TyName, Cow<'static, str>),
     pub lifetime_param: Vec<String>,
 }
 
 impl TyConstuctor {
     pub fn new_simple(name: TyName, lifetime_param: Vec<String>) -> Self {
         Self {
-            name,
+            parts: ("".into(), name, "".into()),
             lifetime_param,
         }
     }
-}
 
-impl Display for TyConstuctor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)?;
+    pub fn new(
+        parts: (Cow<'static, str>, TyName, Cow<'static, str>),
+        lifetime_param: Vec<String>,
+    ) -> Self {
+        Self {
+            parts,
+            lifetime_param,
+        }
+    }
+
+    pub fn fmt_lifetime(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.lifetime_param.is_empty() {
             write!(f, "<")?;
             for (i, lifetime) in self.lifetime_param.iter().enumerate() {
@@ -348,34 +350,54 @@ impl Display for TyConstuctor {
     }
 }
 
+impl Display for TyConstuctor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.parts.0)?;
+        write!(f, "{}", self.parts.1)?;
+        self.fmt_lifetime(f)?;
+        write!(f, "{}", self.parts.2)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TyConstuctorIncomplete {
-    name: TyName,
+    parts: (Cow<'static, str>, TyName, Cow<'static, str>),
     pub lifetime_param: Option<Vec<String>>,
 }
 
 impl TyConstuctorIncomplete {
     pub fn new_simple(name: TyName) -> Self {
         Self {
-            name,
+            parts: ("".into(), name, "".into()),
             lifetime_param: None,
+        }
+    }
+
+    pub fn new(
+        parts: (Cow<'static, str>, TyName, Cow<'static, str>),
+        lifetime_param: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            parts,
+            lifetime_param,
         }
     }
 
     pub fn into_complete(&self) -> Option<TyConstuctor> {
         let lifetime_param = self.lifetime_param.as_ref()?.clone();
-        Some(TyConstuctor::new_simple(self.name.clone(), lifetime_param))
+        Some(TyConstuctor::new(self.parts.clone(), lifetime_param))
     }
 
-    pub fn name(&self) -> &TyName {
-        &self.name
+    pub fn primary_type_name(&self) -> &TyName {
+        &self.parts.1
     }
 }
 
 impl From<TyConstuctor> for TyConstuctorIncomplete {
     fn from(value: TyConstuctor) -> Self {
         Self {
-            name: value.name,
+            parts: value.parts,
             lifetime_param: Some(value.lifetime_param),
         }
     }
@@ -391,7 +413,7 @@ impl TyName {
 }
 
 impl Display for TyName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -400,7 +422,7 @@ impl Display for TyName {
 pub struct FieldName(String);
 
 impl Display for FieldName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }

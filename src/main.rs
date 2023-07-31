@@ -52,47 +52,9 @@ where
     }
 }
 
-enum FieldType {
-    Multiple,
-    Required,
-    Optional,
-}
-
-impl FieldType {
-    fn wrap_ty(&self, ty_name: &str) -> String {
-        match self {
-            FieldType::Multiple => format!("Vec<{ty_name}>"),
-            FieldType::Required => format!("{ty_name}"),
-            FieldType::Optional => format!("Option<{ty_name}>"),
-        }
-    }
-
-    fn cast_wrapper(&self, src: &str, ty_name: &str) -> String {
-        match self {
-            FieldType::Multiple => {
-                format!("{src}.iter().map(|x| {ty_name}(x.clone())).collect()")
-            }
-            FieldType::Required => format!("{ty_name}({src}.clone())"),
-            FieldType::Optional => format!("{src}.map(|x| {ty_name}(x.clone()))"),
-        }
-    }
-}
-
 struct Field {
-    wrapper: FieldType,
     field_name: String,
-    field_ty: String,
-}
-
-impl Field {
-    fn compound_ty(&self) -> String {
-        self.wrapper
-            .wrap_ty(&format!("{}<'a>", self.field_ty.as_str()))
-    }
-
-    fn cast_ty(&self, src: &str) -> String {
-        self.wrapper.cast_wrapper(src, &self.field_ty)
-    }
+    field_ty: TyConstuctorIncomplete,
 }
 
 enum BuildTypeResult<T> {
@@ -337,7 +299,7 @@ fn main() {
                     let mut pre_fields = node.fields.iter().collect::<Vec<_>>();
                     pre_fields.sort_by_key(|x| x.0);
                     for (field_name, field) in pre_fields {
-                        let field_ty = match field.types.as_slice() {
+                        let ty_name = match field.types.as_slice() {
                             [] => "()".to_string(),
                             [single_type] => ty_rename_table.rename(&single_type.ty),
                             types => {
@@ -362,18 +324,23 @@ fn main() {
                             }
                         };
 
-                        let wrapper = if field.multiple {
-                            FieldType::Multiple
+                        let field_ty = if field.multiple {
+                            TyConstuctorIncomplete::new(
+                                ("Vec<".into(), TyName::new(ty_name), ">".into()),
+                                None,
+                            )
                         } else {
                             if field.required {
-                                FieldType::Required
+                                TyConstuctorIncomplete::new_simple(TyName::new(ty_name))
                             } else {
-                                FieldType::Optional
+                                TyConstuctorIncomplete::new(
+                                    ("Option<".into(), TyName::new(ty_name), ">".into()),
+                                    None,
+                                )
                             }
                         };
 
                         fields.push(Field {
-                            wrapper,
                             field_name: field_name.clone(),
                             field_ty,
                         });
@@ -394,29 +361,18 @@ fn main() {
                         println!("{defered_def}");
                     }
 
-                    println!("struct {}<'a>(", field_ty_name);
-                    for field in fields.iter() {
-                        println!("    {},", field.compound_ty())
-                    }
-                    println!(");");
+                    let contents =
+                        Container::Tuple(fields.into_iter().map(|x| x.field_ty).collect());
 
-                    println!("impl<'a> {}<'a> {{", field_ty_name);
-                    for (i, field) in fields.iter().enumerate() {
-                        println!(
-                            "    pub fn {}_node(&self) -> {} {{ self.{i}.clone() }}",
-                            field.field_name,
-                            field.wrapper.wrap_ty("Node<'a>")
-                        );
-                        println!(
-                            "    pub fn {}(&self) -> {} {{ self.{i}.clone() }}",
-                            function_rename_table.rename(&field.field_name),
-                            field.compound_ty(),
-                            // field.cast_ty(&format!("self.{i}"))
-                        );
-                    }
-                    println!("}}");
-                } else {
-                    // println!("struct {}<'a>(Node<'a>);", ty_name);
+                    let res = declarations.insert(
+                        TyName::new(field_ty_name.clone()),
+                        Struct {
+                            name: TyName::new(field_ty_name.clone()),
+                            contents,
+                        }
+                        .into(),
+                    );
+                    assert!(res.is_none());
                 }
 
                 println!("impl<'a> Deref for {ty_name}<'a> {{ type Target = Node<'a>; fn deref(&self) -> &Self::Target {{ &self.0 }} }}");
@@ -466,7 +422,7 @@ fn main() {
                 checking_stack.pop();
             }
             Err(incomplete_ty_def) => {
-                let next_ty_name = incomplete_ty_def.name().clone();
+                let next_ty_name = incomplete_ty_def.primary_type_name().clone();
 
                 if let Some(e) = declarations_completed.get(&next_ty_name) {
                     incomplete_ty_def.lifetime_param = Some(e.ty_constructor().lifetime_param);
@@ -488,4 +444,57 @@ fn main() {
         println!("{}", ty_def);
         println!();
     }
+
+    // macro_rules! type_test {
+    //     () => { parts.push(String::new()) };
+    //     ( ref ($e:tt)  $($tail:tt)* ) => {
+    //         parts.push($e.into());
+    //         type_test!($($tail)*);
+    //     };
+    //     ( ref $($tail:tt)* ) => {
+    //         compile_error!("'ref' token can only be used to indicate the primary type, ex: 'ref(my_ty_str)' or 'ref(\"SomeType\")'")
+    //     };
+    //     ( $e:literal $($tail:tt)* ) => {
+    //         parts.push($e.into());
+    //         type_test!($($tail)*);
+    //     };
+    //     ( $e:ident $($tail:tt)* ) => {
+    //         parts.push($e.into());
+    //         type_test!($($tail)*);
+    //     };
+    // }
+
+    // macro_rules! type_test_index {
+    //     () => {
+    //         compile_error!("At least one 'ref' is needed to mark the primary type, ex: 'ref(my_ty_str)' or 'ref(\"SomeType\")'")
+    //     };
+    //     ( ref ($sub:tt)  $($tail:tt)* ) => {
+    //         0
+    //     };
+    //     ( ref $($tail:tt)* ) => {
+    //         compile_error!("'ref' token can only be used to indicate the primary type, ex: 'ref(my_ty_str)' or 'ref(\"SomeType\")'")
+    //     };
+    //     ( $e:literal $($tail:tt)* ) => {
+    //         1 +
+    //         type_test_index!($($tail)*)
+    //     };
+    //     ( $e:ident $($tail:tt)* ) => {
+    //         1 +
+    //         type_test_index!($($tail)*)
+    //     };
+    // }
+
+    // macro_rules! type_test_outer {
+    //     ( $($tail:tt)* ) => {
+    //         {
+    //             let i = type_test_index!($($tail)*);
+    //             let mut parts: ::std::vec::Vec<::std::borrow::Cow<'static, String>> = ::std::vec::Vec::new();
+    //             type_test!($($tail)*);
+    //         }
+    //     };
+    // }
+
+    // let more = "asd";
+
+    // type_test_outer!("Option<" ref("more") more);
 }
