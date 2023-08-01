@@ -392,7 +392,9 @@ fn main() {
                 );
 
                 let deref_parts = [
-                    "impl<'a> Deref for ".into(),
+                    "impl".into(),
+                    ImplInstruction::DeclareLifetimes,
+                    " Deref for ".into(),
                     ImplInstruction::SelfType,
                     " { type Target = ".into(),
                     ImplInstruction::TyConstructor(node_ty),

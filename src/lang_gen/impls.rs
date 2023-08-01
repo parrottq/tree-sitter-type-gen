@@ -70,7 +70,7 @@ impl<'a> fmt::Display for ImplDisplay<'a> {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{}", lifetime)?;
+                            write!(f, "'{}", lifetime)?;
                         }
                         write!(f, ">")?;
                     }
