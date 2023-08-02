@@ -1,10 +1,10 @@
-use std::{collections::HashSet, fmt};
+use std::{borrow::Cow, collections::HashSet, fmt};
 
-use super::{TyConstuctor, TyConstuctorIncomplete};
+use super::TyConstuctor;
 
 #[derive(Debug, Clone)]
 pub enum ImplInstruction {
-    Literal(&'static str),
+    Literal(Cow<'static, str>),
     SelfType,
     TyConstructor(TyConstuctor),
     DeclareLifetimes,
@@ -12,6 +12,18 @@ pub enum ImplInstruction {
 
 impl From<&'static str> for ImplInstruction {
     fn from(value: &'static str) -> Self {
+        Self::Literal(value.into())
+    }
+}
+
+impl From<String> for ImplInstruction {
+    fn from(value: String) -> Self {
+        Self::Literal(value.into())
+    }
+}
+
+impl From<Cow<'static, str>> for ImplInstruction {
+    fn from(value: Cow<'static, str>) -> Self {
         Self::Literal(value)
     }
 }
