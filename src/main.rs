@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, BTreeMap, HashMap},
     fmt::Debug,
 };
 
@@ -9,8 +9,8 @@ use treeedbgen::Node;
 mod lang_gen;
 
 use lang_gen::{
-    Container, Enum, Impl, ImplInstruction, Struct, TyConstuctor, TyConstuctorIncomplete, TyName,
-    TypeDef,
+    Container, Enum, Impl, ImplInstruction, IntoCompleted, Struct, TyConstuctor,
+    TyConstuctorIncomplete, TyName, TypeDef,
 };
 
 fn rename_type(ty_name: &str) -> String {
@@ -144,8 +144,62 @@ fn build_types_with_defer<T>(
 }
 
 fn main() {
-    println!("use std::ops::Deref;");
-    println!("use tree_sitter::Node;");
+    let prelude = "
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
+use tree_sitter::Node;
+
+pub trait GenericNode<'a> {
+    const NODE_ID: u16;
+    const NODE_KIND: &'static str;
+
+    fn inner_node(&self) -> &Node<'a>;
+    fn inner_node_mut(&mut self) -> &mut Node<'a>;
+    fn downcast(value: Node<'a>) -> Result<Self, Node<'a>>
+    where
+        Self: Sized;
+}
+
+pub struct NodeTy<'a, T>(T, PhantomData<Node<'a>>)
+where
+    T: GenericNode<'a>;
+
+impl<'a, T> TryFrom<Node<'a>> for NodeTy<'a, T>
+where
+    T: GenericNode<'a>,
+{
+    type Error = Node<'a>;
+
+    fn try_from(value: Node<'a>) -> Result<Self, Self::Error> {
+        Ok(Self(T::downcast(value)?, PhantomData))
+    }
+}
+
+impl<'a, T> Deref for NodeTy<'a, T>
+where
+    T: GenericNode<'a>,
+{
+    type Target = Node<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.inner_node()
+    }
+}
+
+impl<'a, T> DerefMut for NodeTy<'a, T>
+where
+    T: GenericNode<'a>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.inner_node_mut()
+    }
+}
+    "
+    .trim();
+    println!("{}", prelude);
+
     let mut function_rename_table = RenameTable::new(|x| x.into());
     function_rename_table.insert_rename("trait".into(), "trait_".into());
     function_rename_table.insert_rename("type".into(), "type_".into());
@@ -191,6 +245,8 @@ fn main() {
         },
     }
 
+    let lang = tree_sitter_rust::language();
+
     let nodes = treeedbgen::nodes(tree_sitter_rust::NODE_TYPES).unwrap();
     let nodes: Vec<_> = nodes
         .into_iter()
@@ -208,7 +264,7 @@ fn main() {
                 // let mut enum_def = String::new();
                 // let f = &mut enum_def;
 
-                let mut variants = HashMap::new();
+                let mut variants = BTreeMap::new();
                 for (ty, named) in subtypes {
                     let sub_ty_name = ty_rename_table.rename(&ty);
                     let sub_ty_name = TyName::new(sub_ty_name);
@@ -260,7 +316,7 @@ fn main() {
                     assert_eq!(node.fields.len(), 0);
                     // let mut output = String::new();
                     // let f = &mut output;
-                    let mut variants = HashMap::with_capacity(node.subtypes.len());
+                    let mut variants = BTreeMap::new();
 
                     for subtype in &node.subtypes {
                         let sub_ty_name = TyName::new(ty_rename_table.rename(&subtype.ty));
@@ -294,10 +350,9 @@ fn main() {
                     ));
                 }
 
-                if node.fields.len() > 0 {
+                let fields_ty: TyConstuctorIncomplete = if node.fields.len() > 0 {
                     // println!("struct {}<'a>(Node<'a>);", ty_name);
 
-                    let mut defered_def = String::new();
                     // println!("impl<'a> {}<'a> {{", ty_name);
                     // println!("}}");
                     let mut fields: Vec<_> = Vec::with_capacity(node.fields.len());
@@ -350,7 +405,7 @@ fn main() {
                     }
 
                     let field_ty_name = format!("{ty_name}Fields");
-                    println!("impl<'a> {}<'a> {{", ty_name);
+                    // println!("impl<'a> {}<'a> {{", ty_name);
                     for (i, field) in fields.iter().enumerate() {
                         // println!(
                         //     "    pub fn fields(&self) -> {} {{ {} }}",
@@ -358,11 +413,7 @@ fn main() {
                         //     field.cast_ty(&format!("self.{i}"))
                         // );
                     }
-                    println!("}}");
-
-                    if !defered_def.is_empty() {
-                        println!("{defered_def}");
-                    }
+                    // println!("}}");
 
                     let contents =
                         Container::Tuple(fields.into_iter().map(|x| x.field_ty).collect());
@@ -378,10 +429,14 @@ fn main() {
                         ),
                     );
                     assert!(res.is_none());
-                }
 
-                let node_ty =
-                    TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]);
+                    TyConstuctorIncomplete::new_simple(TyName::new(field_ty_name.into()))
+                } else {
+                    TyConstuctor::new_simple(TyName::new("()".into()), vec![]).into()
+                };
+
+                let node_ty: TyConstuctorIncomplete =
+                    TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
 
                 let mut def = TypeDef::new(
                     Struct {
@@ -391,23 +446,41 @@ fn main() {
                     .into(),
                 );
 
-                let deref_parts = [
+                let generic_node_ty =
+                    TyConstuctor::new_simple(TyName::new("GenericNode".into()), vec!["a".into()])
+                        .into();
+
+                let node_id = lang.id_for_node_kind(&node.ty, true);
+                let generic_node_parts = [
                     "impl".into(),
                     ImplInstruction::DeclareLifetimes,
-                    " Deref for ".into(),
+                    " ".into(),
+                    ImplInstruction::TyConstructor(generic_node_ty),
+                    " for ".into(),
                     ImplInstruction::SelfType,
-                    " { type Target = ".into(),
-                    ImplInstruction::TyConstructor(node_ty),
-                    "; fn deref(&self) -> &Self::Target { &self.0 } }".into(),
+                    " { const NODE_ID: u16 = ".into(),
+                    format!("{node_id}").into(),
+                    "; const NODE_KIND: &'static str = \"".into(),
+                    format!("{}", node.ty.escape_default()).into(),
+                    "\"; fn inner_node(&self) -> &".into(),
+                    ImplInstruction::TyConstructor(node_ty.clone()),
+                    " { &self.0 } fn inner_node_mut(&mut self) -> &mut ".into(),
+                    ImplInstruction::TyConstructor(node_ty.clone()),
+                    " { &mut self.0 } fn downcast(value: ".into(),
+                    ImplInstruction::TyConstructor(node_ty.clone()),
+                    ") -> Result<Self, ".into(),
+                    ImplInstruction::TyConstructor(node_ty.clone()),
+                    "> { if value.kind_id() == Self::NODE_ID { Ok(Self(value)) } else { Err(value) } } }".into(),
                 ];
-                def.push_impl(Impl::new(deref_parts.to_vec()));
+                def.push_impl(Impl::new(generic_node_parts.to_vec()));
 
                 Ok(def)
             }
         }
     });
 
-    let mut declarations_incomplete = declarations;
+    let mut declarations_incomplete: BTreeMap<TyName, TypeDef<TyConstuctorIncomplete>> =
+        declarations.into_iter().collect();
     let mut declarations_completed: HashMap<TyName, TypeDef<TyConstuctor>> =
         HashMap::with_capacity(declarations_incomplete.len());
     let mut checking_stack: Vec<TyName> = vec![];
@@ -415,14 +488,18 @@ fn main() {
     loop {
         let ty_name = match checking_stack.as_slice() {
             [front @ .., ty_name] => {
-                if let Some(e) = front.iter().find(|x| ty_name.eq(x)) {
+                if let Some(_ty) = front.iter().find(|x| ty_name.eq(x)) {
+                    for stack in checking_stack.iter() {
+                        println!("- {}", stack);
+                    }
+
                     todo!("Cycle found"); // TODO: Handle cycles
                 }
 
                 ty_name.clone()
             }
             [] => {
-                if let Some(ty_name) = declarations_incomplete.keys().next() {
+                if let Some((ty_name, _)) = declarations_incomplete.first_key_value() {
                     checking_stack.push(ty_name.clone());
                     ty_name.clone()
                 } else {
@@ -461,57 +538,4 @@ fn main() {
         println!("{}", ty_def);
         println!();
     }
-
-    // macro_rules! type_test {
-    //     () => { parts.push(String::new()) };
-    //     ( ref ($e:tt)  $($tail:tt)* ) => {
-    //         parts.push($e.into());
-    //         type_test!($($tail)*);
-    //     };
-    //     ( ref $($tail:tt)* ) => {
-    //         compile_error!("'ref' token can only be used to indicate the primary type, ex: 'ref(my_ty_str)' or 'ref(\"SomeType\")'")
-    //     };
-    //     ( $e:literal $($tail:tt)* ) => {
-    //         parts.push($e.into());
-    //         type_test!($($tail)*);
-    //     };
-    //     ( $e:ident $($tail:tt)* ) => {
-    //         parts.push($e.into());
-    //         type_test!($($tail)*);
-    //     };
-    // }
-
-    // macro_rules! type_test_index {
-    //     () => {
-    //         compile_error!("At least one 'ref' is needed to mark the primary type, ex: 'ref(my_ty_str)' or 'ref(\"SomeType\")'")
-    //     };
-    //     ( ref ($sub:tt)  $($tail:tt)* ) => {
-    //         0
-    //     };
-    //     ( ref $($tail:tt)* ) => {
-    //         compile_error!("'ref' token can only be used to indicate the primary type, ex: 'ref(my_ty_str)' or 'ref(\"SomeType\")'")
-    //     };
-    //     ( $e:literal $($tail:tt)* ) => {
-    //         1 +
-    //         type_test_index!($($tail)*)
-    //     };
-    //     ( $e:ident $($tail:tt)* ) => {
-    //         1 +
-    //         type_test_index!($($tail)*)
-    //     };
-    // }
-
-    // macro_rules! type_test_outer {
-    //     ( $($tail:tt)* ) => {
-    //         {
-    //             let i = type_test_index!($($tail)*);
-    //             let mut parts: ::std::vec::Vec<::std::borrow::Cow<'static, String>> = ::std::vec::Vec::new();
-    //             type_test!($($tail)*);
-    //         }
-    //     };
-    // }
-
-    // let more = "asd";
-
-    // type_test_outer!("Option<" ref("more") more);
 }

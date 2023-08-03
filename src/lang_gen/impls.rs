@@ -1,43 +1,73 @@
 use std::{borrow::Cow, collections::HashSet, fmt};
 
-use super::TyConstuctor;
+use super::{IntoCompleted, TyConstuctor, TyConstuctorIncomplete};
 
 #[derive(Debug, Clone)]
-pub enum ImplInstruction {
+pub enum ImplInstruction<T> {
     Literal(Cow<'static, str>),
     SelfType,
-    TyConstructor(TyConstuctor),
+    TyConstructor(T),
     DeclareLifetimes,
 }
 
-impl From<&'static str> for ImplInstruction {
+impl<T> From<&'static str> for ImplInstruction<T> {
     fn from(value: &'static str) -> Self {
         Self::Literal(value.into())
     }
 }
 
-impl From<String> for ImplInstruction {
+impl<T> From<String> for ImplInstruction<T> {
     fn from(value: String) -> Self {
         Self::Literal(value.into())
     }
 }
 
-impl From<Cow<'static, str>> for ImplInstruction {
+impl<T> From<Cow<'static, str>> for ImplInstruction<T> {
     fn from(value: Cow<'static, str>) -> Self {
         Self::Literal(value)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Impl {
-    parts: Vec<ImplInstruction>,
+impl IntoCompleted for ImplInstruction<TyConstuctorIncomplete> {
+    type Result = ImplInstruction<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
+        Ok(match self {
+            ImplInstruction::Literal(e) => ImplInstruction::Literal(e.clone()),
+            ImplInstruction::SelfType => ImplInstruction::SelfType,
+            ImplInstruction::TyConstructor(ty) => {
+                ImplInstruction::TyConstructor(ty.into_completed()?)
+            }
+            ImplInstruction::DeclareLifetimes => ImplInstruction::DeclareLifetimes,
+        })
+    }
 }
 
-impl Impl {
-    pub fn new(parts: Vec<ImplInstruction>) -> Self {
+#[derive(Debug, Clone)]
+pub struct Impl<T> {
+    parts: Vec<ImplInstruction<T>>,
+}
+
+impl<T> Impl<T> {
+    pub fn new(parts: Vec<ImplInstruction<T>>) -> Self {
         Self { parts }
     }
+}
 
+impl IntoCompleted for Impl<TyConstuctorIncomplete> {
+    type Result = Impl<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
+        let mut new_parts = Vec::with_capacity(self.parts.len());
+        for part in self.parts.iter_mut() {
+            new_parts.push(part.into_completed()?);
+        }
+
+        Ok(Impl { parts: new_parts })
+    }
+}
+
+impl Impl<TyConstuctor> {
     pub fn displayer<'a>(&'a self, self_ty: &'a TyConstuctor) -> ImplDisplay<'a> {
         ImplDisplay { imp: self, self_ty }
     }
@@ -45,7 +75,7 @@ impl Impl {
 
 #[derive(Debug, Clone)]
 pub struct ImplDisplay<'a> {
-    imp: &'a Impl,
+    imp: &'a Impl<TyConstuctor>,
     self_ty: &'a TyConstuctor,
 }
 

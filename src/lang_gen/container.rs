@@ -1,11 +1,11 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::BTreeMap, fmt};
 
-use super::{FieldName, TyConstuctor, TyConstuctorIncomplete};
+use super::{FieldName, IntoCompleted, TyConstuctor, TyConstuctorIncomplete};
 
 #[derive(Debug, Clone)]
 pub enum Container<T> {
     Tuple(Vec<T>),
-    Named(HashMap<FieldName, T>),
+    Named(BTreeMap<FieldName, T>),
 }
 
 impl Container<TyConstuctorIncomplete> {
@@ -22,25 +22,24 @@ impl Container<TyConstuctorIncomplete> {
             Container::Named(n) => n.values_mut().find(|x| x.lifetime_param.is_none()),
         }
     }
+}
 
-    pub fn into_completed(
-        &mut self,
-    ) -> Result<Container<TyConstuctor>, &mut TyConstuctorIncomplete> {
+impl IntoCompleted for Container<TyConstuctorIncomplete> {
+    type Result = Container<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
         match self {
             Container::Tuple(e) => {
                 let mut l = Vec::with_capacity(e.len());
                 for incomplete_ty in e {
-                    l.push(incomplete_ty.into_completed().ok_or(incomplete_ty)?);
+                    l.push(incomplete_ty.into_completed()?);
                 }
                 Ok(Container::Tuple(l))
             }
             Container::Named(e) => {
-                let mut l = HashMap::with_capacity(e.len());
+                let mut l = BTreeMap::new();
                 for (ty_name, incomplete_ty) in e {
-                    l.insert(
-                        ty_name.clone(),
-                        incomplete_ty.into_completed().ok_or(incomplete_ty)?,
-                    );
+                    l.insert(ty_name.clone(), incomplete_ty.into_completed()?);
                 }
                 Ok(Container::Named(l))
             }

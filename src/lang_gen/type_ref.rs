@@ -1,5 +1,7 @@
 use std::{borrow::Cow, fmt};
 
+use super::IntoCompleted;
+
 #[derive(Debug, Clone)]
 pub struct TyConstuctor {
     parts: (Cow<'static, str>, TyName, Cow<'static, str>),
@@ -78,13 +80,23 @@ impl TyConstuctorIncomplete {
         }
     }
 
-    pub fn into_completed(&self) -> Option<TyConstuctor> {
-        let lifetime_param = self.lifetime_param.as_ref()?.clone();
-        Some(TyConstuctor::new(self.parts.clone(), lifetime_param))
-    }
-
     pub fn primary_type_name(&self) -> &TyName {
         &self.parts.1
+    }
+}
+
+impl IntoCompleted for TyConstuctorIncomplete {
+    type Result = TyConstuctor;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
+        if let Some(lifetime_param) = self.lifetime_param.as_ref() {
+            Ok(TyConstuctor::new(
+                self.parts.clone(),
+                lifetime_param.clone(),
+            ))
+        } else {
+            Err(self)
+        }
     }
 }
 

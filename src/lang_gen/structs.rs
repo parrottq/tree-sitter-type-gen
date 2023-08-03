@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, fmt};
 
-use super::{Container, TyConstuctor, TyConstuctorIncomplete, TyName};
+use super::{Container, IntoCompleted, TyConstuctor, TyConstuctorIncomplete, TyName};
 
 #[derive(Debug, Clone)]
 pub struct Struct<T> {
@@ -45,12 +45,19 @@ impl Struct<TyConstuctorIncomplete> {
     pub fn next_incomplete_mut(&mut self) -> Option<&mut TyConstuctorIncomplete> {
         self.contents.next_incomplete_mut()
     }
+}
 
-    pub fn into_completed(&mut self) -> Result<Struct<TyConstuctor>, &mut TyConstuctorIncomplete> {
-        self.contents.into_completed().map(|x| Struct {
-            name: self.name.clone(),
-            contents: x,
-        })
+impl IntoCompleted for Struct<TyConstuctorIncomplete> {
+    type Result = Struct<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
+        match self.contents.into_completed() {
+            Ok(x) => Ok(Struct {
+                name: self.name.clone(),
+                contents: x,
+            }),
+            Err(e) => Err(e),
+        }
     }
 }
 

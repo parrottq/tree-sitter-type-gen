@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::{Enum, Struct, TyConstuctor, TyConstuctorIncomplete, TyName};
+use super::{Enum, IntoCompleted, Struct, TyConstuctor, TyConstuctorIncomplete, TyName};
 
 #[derive(Debug, Clone)]
 pub enum ContainerDef<T> {
@@ -40,10 +40,12 @@ impl ContainerDef<TyConstuctorIncomplete> {
             ContainerDef::Enum(e) => e.next_incomplete_mut(),
         }
     }
+}
 
-    pub fn into_completed(
-        &mut self,
-    ) -> Result<ContainerDef<TyConstuctor>, &mut TyConstuctorIncomplete> {
+impl IntoCompleted for ContainerDef<TyConstuctorIncomplete> {
+    type Result = ContainerDef<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
         match self {
             ContainerDef::Struct(e) => e.into_completed().map(Into::into),
             ContainerDef::Enum(e) => e.into_completed().map(Into::into),

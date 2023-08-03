@@ -1,14 +1,14 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     fmt,
 };
 
-use super::{Container, TyConstuctor, TyConstuctorIncomplete, TyName};
+use super::{Container, IntoCompleted, TyConstuctor, TyConstuctorIncomplete, TyName};
 
 #[derive(Debug, Clone)]
 pub struct Enum<T> {
     pub name: TyName,
-    pub variants: HashMap<TyName, Container<T>>, // TODO: TyName shoud be VariantName
+    pub variants: BTreeMap<TyName, Container<T>>, // TODO: TyName shoud be VariantName
 }
 
 impl<T> Enum<T> {
@@ -52,9 +52,13 @@ impl Enum<TyConstuctorIncomplete> {
             .values_mut()
             .find_map(|x| x.next_incomplete_mut())
     }
+}
 
-    pub fn into_completed(&mut self) -> Result<Enum<TyConstuctor>, &mut TyConstuctorIncomplete> {
-        let mut variants = HashMap::with_capacity(self.variants.len());
+impl IntoCompleted for Enum<TyConstuctorIncomplete> {
+    type Result = Enum<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
+        let mut variants = BTreeMap::new();
         for (ty_name, container) in &mut self.variants {
             let e = container.into_completed()?;
             variants.insert(ty_name.clone(), e);

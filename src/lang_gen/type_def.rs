@@ -1,11 +1,11 @@
 use std::fmt;
 
-use super::{ContainerDef, Impl, TyConstuctor, TyConstuctorIncomplete, TyName};
+use super::{ContainerDef, Impl, IntoCompleted, TyConstuctor, TyConstuctorIncomplete, TyName};
 
 #[derive(Debug, Clone)]
 pub struct TypeDef<T> {
     container: ContainerDef<T>,
-    impls: Vec<Impl>,
+    impls: Vec<Impl<T>>,
 }
 
 impl<T> TypeDef<T> {
@@ -20,18 +20,20 @@ impl<T> TypeDef<T> {
         self.container.name()
     }
 
-    pub fn push_impl(&mut self, imp: Impl) {
+    pub fn push_impl(&mut self, imp: Impl<T>) {
         self.impls.push(imp);
     }
 }
 
-impl TypeDef<TyConstuctorIncomplete> {
-    pub fn into_completed(&mut self) -> Result<TypeDef<TyConstuctor>, &mut TyConstuctorIncomplete> {
+impl IntoCompleted for TypeDef<TyConstuctorIncomplete> {
+    type Result = TypeDef<TyConstuctor>;
+
+    fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
         let converted_container = self.container.into_completed()?;
 
         let mut converted_impls = Vec::with_capacity(self.impls.len());
         for imp in self.impls.iter_mut() {
-            converted_impls.push(imp.clone());
+            converted_impls.push(imp.into_completed()?);
         }
 
         Ok(TypeDef {
