@@ -84,7 +84,7 @@ impl fmt::Display for Enum<TyConstuctor> {
                 if i == self.variants.len() - 1 {
                     ""
                 } else {
-                    ", "
+                    ","
                 }
             )?;
         }
