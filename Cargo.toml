@@ -5,5 +5,7 @@ edition = "2021"
 
 [dependencies]
 convert_case = "0.6.0"
+indexmap = { version = "2.0.0", features = ["serde"] }
+serde = { version = "1.0.180", features = ["derive"] }
+serde_json = { version = "1.0.104", features = ["preserve_order"] }
 tree-sitter-rust = "0.20.3"
-treeedbgen = "0.1.0-rc.5"

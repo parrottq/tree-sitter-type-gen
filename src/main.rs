@@ -4,9 +4,9 @@ use std::{
 };
 
 use convert_case::{Case, Casing};
-use treeedbgen::Node;
 
 mod lang_gen;
+mod node;
 
 use lang_gen::{
     Container, ContainerDef, Enum, Impl, ImplInstruction, IntoCompleted, Struct, TyConstuctor,
@@ -142,6 +142,25 @@ fn build_types_with_defer<T>(
 }
 
 fn main() {
+
+    #[derive(Debug)]
+    enum Input {
+        Node(node::Node),
+        FieldValues {
+            name: TyName,
+            subtypes: Vec<(String, bool)>,
+        },
+    }
+
+    let lang = tree_sitter_rust::language();
+
+    let nodes = serde_json::from_str::<Vec<node::Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
+    let nodes: Vec<_> = nodes
+        .into_iter()
+        .filter(|x| x.named)
+        .map(Input::Node)
+        .collect();
+
     let prelude = "
 use std::{
     marker::PhantomData,
@@ -235,24 +254,6 @@ where
     ty_rename_table.insert_rename(">>=".into(), "AssignRightShift".into());
     ty_rename_table.insert_rename("^=".into(), "AssignXor".into());
     ty_rename_table.insert_rename("|=".into(), "AssignOr".into());
-
-    #[derive(Debug)]
-    enum Input {
-        Node(Node),
-        FieldValues {
-            name: TyName,
-            subtypes: Vec<(String, bool)>,
-        },
-    }
-
-    let lang = tree_sitter_rust::language();
-
-    let nodes = treeedbgen::nodes(tree_sitter_rust::NODE_TYPES).unwrap();
-    let nodes: Vec<_> = nodes
-        .into_iter()
-        .filter(|x| x.named)
-        .map(Input::Node)
-        .collect();
 
     let mut declarations: HashMap<TyName, TyDefBare> = HashMap::with_capacity(nodes.len());
 
