@@ -54,11 +54,6 @@ where
     }
 }
 
-struct Field {
-    field_name: String,
-    field_ty: TyConstuctorIncomplete,
-}
-
 enum BuildTypeResult<T> {
     DeclareFirst { defer_ty_name: TyName, append: T },
     Error(String),
@@ -368,10 +363,7 @@ where
                             }
                         };
 
-                        fields.push(Field {
-                            field_name: field_name.clone(),
-                            field_ty,
-                        });
+                        fields.push(field_ty);
                     }
 
                     let field_ty_name = format!("{ty_name}Fields");
@@ -385,8 +377,7 @@ where
                     }
                     // println!("}}");
 
-                    let contents =
-                        Container::Tuple(fields.into_iter().map(|x| x.field_ty).collect());
+                    let contents = Container::Tuple(fields);
 
                     let res = declarations.insert(
                         TyName::new(field_ty_name.clone()),
