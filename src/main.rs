@@ -12,6 +12,7 @@ use lang_gen::{
     Container, ContainerDef, Enum, Impl, ImplInstruction, IntoCompleted, Struct, TyConstuctor,
     TyConstuctorIncomplete, TyName, TypeDef,
 };
+use node::Field;
 
 fn rename_type(ty_name: &str) -> String {
     match ty_name {
@@ -157,6 +158,39 @@ fn build_variant_type(
         vec![],
         vec![], // TODO: Add attr
     )
+}
+
+fn build_field_type(
+    declarations: &mut HashMap<TyName, TyDefBare>,
+    ty_rename_table: &mut RenameTable<impl FnMut(&str) -> String>,
+    field: &Field,
+    variant_type_name_fun: impl FnOnce() -> TyName,
+) -> TyConstuctorIncomplete {
+    let ty_name = match field.types.as_slice() {
+        [] => TyName::new("()".to_string()),
+        [single_type] => TyName::new(ty_rename_table.rename(&single_type.ty)),
+        types => {
+            let sub_ty_name = variant_type_name_fun();
+            let v = build_variant_type(
+                ty_rename_table,
+                sub_ty_name.clone(),
+                types.iter().map(|x| (x.ty.clone(), x.named)).collect(),
+            );
+            let res = declarations.insert(sub_ty_name.clone(), v);
+            assert!(res.is_none());
+            sub_ty_name
+        }
+    };
+
+    if field.multiple {
+        TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), None)
+    } else {
+        if field.required {
+            TyConstuctorIncomplete::new_simple(ty_name)
+        } else {
+            TyConstuctorIncomplete::new(("Option<".into(), ty_name, ">".into()), None)
+        }
+    }
 }
 
 fn main() {
@@ -387,41 +421,15 @@ where
         }
 
         let fields_ty: TyConstuctorIncomplete = if node.fields.len() > 0 {
-            let mut fields: Vec<_> = Vec::with_capacity(node.fields.len());
-
-            let mut pre_fields = node.fields.iter().collect::<Vec<_>>();
-            pre_fields.sort_by_key(|x| x.0);
-            for (field_name, field) in pre_fields {
-                let ty_name = match field.types.as_slice() {
-                    [] => TyName::new("()".to_string()),
-                    [single_type] => TyName::new(ty_rename_table.rename(&single_type.ty)),
-                    types => {
-                        let name = format!("{}_{}", ty_name, field_name);
-
-                        let sub_ty_name = TyName::new(name.clone());
-                        let v = build_variant_type(
-                            &mut ty_rename_table,
-                            sub_ty_name.clone(),
-                            types.iter().map(|x| (x.ty.clone(), x.named)).collect(),
-                        );
-                        let res = declarations.insert(sub_ty_name.clone(), v);
-                        assert!(res.is_none());
-                        sub_ty_name
-                    }
-                };
-
-                let field_ty = if field.multiple {
-                    TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), None)
-                } else {
-                    if field.required {
-                        TyConstuctorIncomplete::new_simple(ty_name)
-                    } else {
-                        TyConstuctorIncomplete::new(("Option<".into(), ty_name, ">".into()), None)
-                    }
-                };
-
-                fields.push(field_ty);
-            }
+            let fields: Vec<_> = node
+                .fields
+                .iter()
+                .map(|(field_name, field)| {
+                    build_field_type(declarations, &mut ty_rename_table, field, || {
+                        TyName::new(format!("{}_{}", ty_name, field_name))
+                    })
+                })
+                .collect();
 
             let field_ty_name = format!("{ty_name}Fields");
             // println!("impl<'a> {}<'a> {{", ty_name);
