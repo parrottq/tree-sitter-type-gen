@@ -72,7 +72,7 @@ fn build_types_with_defer<T>(
 ) where
     T: Debug,
 {
-    const DEBUG: bool = true;
+    const DEBUG: bool = false;
 
     let inputs_len = inputs.len();
     let mut deferals: HashMap<TyName, Vec<T>> = Default::default();
@@ -350,9 +350,13 @@ where
 
     let mut declarations: HashMap<TyName, TyDefBare> = HashMap::with_capacity(nodes.len());
 
+    const DEBUG: bool = false;
+
     build_types_with_defer(&mut declarations, nodes, |declarations, node| {
         let ty_name = ty_rename_table.rename(&node.ty);
-        println!("// Processing '{ty_name}' '{}'", node.ty);
+        if DEBUG {
+            println!("// Processing '{ty_name}' '{}'", node.ty);
+        }
 
         if node.subtypes.len() > 0 {
             assert_eq!(node.fields.len(), 0);
@@ -544,27 +548,35 @@ where
             }
         };
 
-        println!(
-            "// name({}) completed({}) incomplete({})",
-            ty_name,
-            declarations_partial_completed.len(),
-            declarations_incomplete.len()
-        );
+        if DEBUG {
+            println!(
+                "// name({}) completed({}) incomplete({})",
+                ty_name,
+                declarations_partial_completed.len(),
+                declarations_incomplete.len()
+            );
+        }
 
         let ty_def = declarations_incomplete.get_mut(&ty_name).unwrap();
         match ty_def.0.into_completed() {
             Ok(completed) => {
-                println!("// Ok");
+                if DEBUG {
+                    println!("// Ok");
+                }
+
                 let (_, impls, attr) = declarations_incomplete.remove(&ty_name).unwrap();
                 declarations_partial_completed.insert(ty_name.clone(), (completed, impls, attr));
                 checking_stack.pop();
             }
             Err(incomplete_ty_def) => {
-                println!(
-                    "// Err {} {}",
-                    incomplete_ty_def.primary_type_name(),
-                    ty_name
-                );
+                if DEBUG {
+                    println!(
+                        "// Err {} {}",
+                        incomplete_ty_def.primary_type_name(),
+                        ty_name
+                    );
+                }
+
                 let next_ty_name = incomplete_ty_def.primary_type_name().clone();
 
                 if let Some((container, _, _)) = declarations_partial_completed.get(&next_ty_name) {
