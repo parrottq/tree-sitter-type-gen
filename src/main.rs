@@ -166,9 +166,9 @@ fn build_field_type(
     field: &Field,
     variant_type_name_fun: impl FnOnce() -> TyName,
 ) -> TyConstuctorIncomplete {
-    let ty_name = match field.types.as_slice() {
-        [] => TyName::new("()".to_string()),
-        [single_type] => TyName::new(ty_rename_table.rename(&single_type.ty)),
+    let (ty_name, lifetime) = match field.types.as_slice() {
+        [] => (TyName::new("()".to_string()), Some(vec![])),
+        [single_type] => (TyName::new(ty_rename_table.rename(&single_type.ty)), None),
         types => {
             let sub_ty_name = variant_type_name_fun();
             let v = build_variant_type(
@@ -178,17 +178,17 @@ fn build_field_type(
             );
             let res = declarations.insert(sub_ty_name.clone(), v);
             assert!(res.is_none());
-            sub_ty_name
+            (sub_ty_name, None)
         }
     };
 
     if field.multiple {
-        TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), None)
+        TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), lifetime)
     } else {
         if field.required {
-            TyConstuctorIncomplete::new_simple(ty_name)
+            TyConstuctorIncomplete::new(("".into(), ty_name, "".into()), lifetime)
         } else {
-            TyConstuctorIncomplete::new(("Option<".into(), ty_name, ">".into()), None)
+            TyConstuctorIncomplete::new(("Option<".into(), ty_name, ">".into()), lifetime)
         }
     }
 }
