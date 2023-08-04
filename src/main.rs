@@ -54,8 +54,7 @@ where
     }
 }
 
-enum BuildTypeResult<T> {
-    DeclareFirst { defer_ty_name: TyName, append: T },
+enum BuildTypeResult {
     Error(String),
 }
 
@@ -69,7 +68,7 @@ type TyDefBare = (
 fn build_types_with_defer<T>(
     definitions: &mut HashMap<TyName, TyDefBare>,
     mut inputs: Vec<T>,
-    mut fun: impl FnMut(&mut HashMap<TyName, TyDefBare>, &T) -> Result<TyDefBare, BuildTypeResult<T>>,
+    mut fun: impl FnMut(&mut HashMap<TyName, TyDefBare>, &T) -> Result<TyDefBare, BuildTypeResult>,
 ) where
     T: Debug,
 {
@@ -102,19 +101,6 @@ fn build_types_with_defer<T>(
 
                 let res = definitions.insert(ty_name, ty_def);
                 assert!(res.is_none());
-            }
-            Err(BuildTypeResult::DeclareFirst {
-                append: new_declaration,
-                defer_ty_name,
-            }) => {
-                if DEBUG {
-                    println!("// First {new_declaration:?}");
-                }
-                inputs.push(new_declaration);
-                deferals
-                    .entry(defer_ty_name)
-                    .or_insert_with(|| Default::default())
-                    .push(input);
             }
             Err(BuildTypeResult::Error(err)) => {
                 if DEBUG {
