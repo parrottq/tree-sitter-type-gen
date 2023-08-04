@@ -4,6 +4,7 @@ use super::{ContainerDef, Impl, IntoCompleted, TyConstuctor, TyConstuctorIncompl
 
 #[derive(Debug, Clone)]
 pub struct TypeDef<T> {
+    attr: Vec<&'static str>,
     container: ContainerDef<T>,
     impls: Vec<Impl<T>>,
 }
@@ -11,6 +12,7 @@ pub struct TypeDef<T> {
 impl<T> TypeDef<T> {
     pub fn new(container: ContainerDef<T>) -> Self {
         Self {
+            attr: vec![],
             container,
             impls: vec![],
         }
@@ -22,6 +24,10 @@ impl<T> TypeDef<T> {
 
     pub fn push_impl(&mut self, imp: Impl<T>) {
         self.impls.push(imp);
+    }
+
+    pub fn push_attr(&mut self, attr: &'static str) {
+        self.attr.push(attr);
     }
 }
 
@@ -37,6 +43,7 @@ impl IntoCompleted for TypeDef<TyConstuctorIncomplete> {
         }
 
         Ok(TypeDef {
+            attr: self.attr.clone(),
             container: converted_container,
             impls: converted_impls,
         })
@@ -51,6 +58,9 @@ impl TypeDef<TyConstuctor> {
 
 impl fmt::Display for TypeDef<TyConstuctor> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for attr in self.attr.iter() {
+            writeln!(f, "{}", attr)?;
+        }
         write!(f, "{}", self.container)?;
         for imp in self.impls.iter() {
             write!(f, "\n{}", imp.displayer(&self.ty_constructor()))?;

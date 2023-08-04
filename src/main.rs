@@ -63,6 +63,7 @@ enum BuildTypeResult<T> {
 type TyDefBare = (
     ContainerDef<TyConstuctorIncomplete>,
     Vec<Impl<TyConstuctorIncomplete>>,
+    Vec<&'static str>,
 );
 
 fn build_types_with_defer<T>(
@@ -374,6 +375,7 @@ where
                     }
                     .into(),
                     vec![],
+                    vec![], // TODO: Add attr
                 ))
             }
             Input::Node(node) => {
@@ -405,6 +407,7 @@ where
                         }
                         .into(),
                         vec![],
+                        vec![], // TODO: Add attr
                     ));
                 }
 
@@ -477,6 +480,7 @@ where
                             }
                             .into(),
                             vec![],
+                            vec![], // TODO: Add attr
                         ),
                     );
                     assert!(res.is_none());
@@ -534,6 +538,7 @@ where
                     " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_current(tree) } }".into()
                 ].to_vec());
 
+                let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
 
                 Ok((
                     Struct {
@@ -542,6 +547,7 @@ where
                     }
                     .into(),
                     vec![generic_node_parts, deserialize_node_parts],
+                    attr,
                 ))
             }
         }
@@ -554,6 +560,7 @@ where
         (
             ContainerDef<TyConstuctor>,
             Vec<Impl<TyConstuctorIncomplete>>,
+            Vec<&'static str>,
         ),
     > = BTreeMap::new();
     let mut checking_stack: Vec<TyName> = vec![];
@@ -592,8 +599,8 @@ where
         match ty_def.0.into_completed() {
             Ok(completed) => {
                 println!("// Ok");
-                let (_, impls) = declarations_incomplete.remove(&ty_name).unwrap();
-                declarations_partial_completed.insert(ty_name.clone(), (completed, impls));
+                let (_, impls, attr) = declarations_incomplete.remove(&ty_name).unwrap();
+                declarations_partial_completed.insert(ty_name.clone(), (completed, impls, attr));
                 checking_stack.pop();
             }
             Err(incomplete_ty_def) => {
@@ -604,7 +611,7 @@ where
                 );
                 let next_ty_name = incomplete_ty_def.primary_type_name().clone();
 
-                if let Some((container, _)) = declarations_partial_completed.get(&next_ty_name) {
+                if let Some((container, _, _)) = declarations_partial_completed.get(&next_ty_name) {
                     incomplete_ty_def.lifetime_param =
                         Some(container.ty_constructor().lifetime_param);
                 } else {
@@ -619,9 +626,10 @@ where
 
     let mut declarations_completed: BTreeMap<TyName, TypeDef<TyConstuctor>> = BTreeMap::new();
     while let Some(entry) = declarations_partial_completed.first_entry() {
-        let (ty_name, (ty_container, ty_impls)) = entry.remove_entry();
+        let (ty_name, (ty_container, ty_impls, attrs)) = entry.remove_entry();
 
         let mut ty_def = TypeDef::new(ty_container);
+        attrs.into_iter().for_each(|attr| ty_def.push_attr(attr));
 
         for mut ty_impl in ty_impls {
             let f = loop {
@@ -637,7 +645,7 @@ where
                             partial.lifetime_param = Some(ty_def.ty_constructor().lifetime_param);
                             continue;
                         }
-                        if let Some((ty_container, _ty_impls)) =
+                        if let Some((ty_container, _ty_impls, _attr)) =
                             declarations_partial_completed.get(&partial_ty_name)
                         {
                             partial.lifetime_param =
