@@ -211,6 +211,7 @@ pub trait GenericNode<'a> {
     const NODE_KIND: &'static str;
 
     type Fields;
+    type Child;
 
     fn inner_node(&self) -> &Node<'a>;
     fn inner_node_mut(&mut self) -> &mut Node<'a>;
@@ -392,6 +393,16 @@ where
             println!("// Processing '{ty_name}' '{}'", node.ty);
         }
 
+        let child_ty = node
+            .children
+            .as_ref()
+            .map(|children| {
+                build_field_type(declarations, &mut ty_rename_table, children, || {
+                    TyName::new(format!("{}Child", ty_name))
+                })
+            })
+            .unwrap_or_else(|| TyConstuctor::new_simple(TyName::new("()".to_owned()), vec![]).into());
+
         if node.subtypes.len() > 0 {
             assert_eq!(node.fields.len(), 0);
             let mut variants = BTreeMap::new();
@@ -483,6 +494,8 @@ where
             format!("{}", node.ty.escape_default()).into(),
             "\"; type Fields = ".into(),
             ImplInstruction::TyConstructor(fields_ty),
+            "; type Child = ".into(),
+            ImplInstruction::TyConstructor(child_ty),
             "; fn inner_node(&self) -> &".into(),
             ImplInstruction::TyConstructor(node_ty.clone()),
             " { &self.0 } fn inner_node_mut(&mut self) -> &mut ".into(),
