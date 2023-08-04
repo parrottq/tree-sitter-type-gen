@@ -255,14 +255,23 @@ where
     }
 }
 
-pub trait DeserializeNode<'a> {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self;
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeserializeError {
+    NoChild,
+    WrongType
 }
 
-fn default_deserialize_at_root<'a, T>(tree: &mut TreeCursor<'a>) -> T
+pub trait DeserializeNode<'a>
 where
-    T: DeserializeNode<'a> + GenericNode<'a>,
+    Self: Sized,
+{
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError>;
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError>;
+}
+
+fn default_deserialize_at_root<'a, T>(tree: &mut TreeCursor<'a>) -> Result<T, DeserializeError>
+where
+    T: DeserializeNode<'a>
 {
     if tree.goto_first_child() {
         let res = T::deserialize_at_current(tree);
@@ -270,50 +279,51 @@ where
         debug_assert!(!has_sibling);
         let has_parent = tree.goto_parent();
         debug_assert!(has_parent);
-        res
+        Ok(res?)
     } else {
-        panic!("Tried to deserialize '{}' but no child of type '{}' is present", tree.node().kind(), T::NODE_KIND);
+        Err(DeserializeError::NoChild)
     }
 }
 
-fn default_deserialize_at_current<'a, T>(tree: &mut TreeCursor<'a>) -> T
+fn default_deserialize_at_current<'a, T>(tree: &mut TreeCursor<'a>) -> Result<T, DeserializeError>
 where
     T: DeserializeNode<'a> + GenericNode<'a>,
 {
-    T::downcast(tree.node()).unwrap()
+    T::downcast(tree.node()).map_err(|_| DeserializeError::WrongType)
 }
 
 impl<'a, T> DeserializeNode<'a> for Option<T>
 where
     T: DeserializeNode<'a>,
 {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self {
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
         if tree.goto_first_child() {
             let res = Self::deserialize_at_current(tree);
             let has_sibling = tree.goto_next_sibling();
             debug_assert!(!has_sibling);
             let has_parent = tree.goto_parent();
             debug_assert!(has_parent);
-            res
+            Ok(res?)
         } else {
-            None
+            Err(DeserializeError::NoChild) // TODO: Reuse this function with default impl?
         }
     }
 
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self {
-        Some(T::deserialize_at_current(tree))
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        Ok(Some(T::deserialize_at_current(tree)?))
     }
 }
 
 impl<'a> DeserializeNode<'a> for () {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self {
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
         let has_child = tree.goto_first_child();
         dbg!(!has_child);
+        Ok(())
     }
 
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self {
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
         // This makes it possible to count children without copying nodes by deserializing into 'Vec<()>'
-        ()
+        Ok(())
     }
 }
 
@@ -321,24 +331,24 @@ impl<'a, T> DeserializeNode<'a> for Vec<T>
 where
     T: DeserializeNode<'a>,
 {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self {
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
         if tree.goto_first_child() {
             let res = Self::deserialize_at_current(tree);
             let has_parent = tree.goto_parent();
             debug_assert!(has_parent);
-            res
+            Ok(res?)
         } else {
-            vec![]
+            Ok(vec![])
         }
     }
 
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self {
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
         let mut nodes = Vec::new();
         loop {
-            nodes.push(T::deserialize_at_current(tree));
+            nodes.push(T::deserialize_at_current(tree)?);
 
             if !tree.goto_next_sibling() {
-                break nodes;
+                break Ok(nodes);
             }
         }
     }
@@ -401,7 +411,9 @@ where
                     TyName::new(format!("{}Child", ty_name))
                 })
             })
-            .unwrap_or_else(|| TyConstuctor::new_simple(TyName::new("()".to_owned()), vec![]).into());
+            .unwrap_or_else(|| {
+                TyConstuctor::new_simple(TyName::new("()".to_owned()), vec![]).into()
+            });
 
         if node.subtypes.len() > 0 {
             assert_eq!(node.fields.len(), 0);
@@ -518,7 +530,7 @@ where
             ImplInstruction::TyConstructor(deserialize_node_ty),
             " for ".into(),
             ImplInstruction::SelfType,
-            " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_current(tree) } }".into()
+            " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { default_deserialize_at_current(tree) } }".into()
         ].to_vec());
 
         let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
