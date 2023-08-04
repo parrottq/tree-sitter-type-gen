@@ -142,24 +142,42 @@ fn build_types_with_defer<T>(
     }
 }
 
-fn main() {
-    #[derive(Debug)]
-    enum Input {
-        Node(node::Node),
-        FieldValues {
-            name: TyName,
-            subtypes: Vec<(String, bool)>,
-        },
+fn build_variant_type(
+    ty_rename_table: &mut RenameTable<impl FnMut(&str) -> String>,
+    name: TyName,
+    subtypes: Vec<(String, bool)>,
+) -> TyDefBare {
+    let mut variants = BTreeMap::new();
+    for (ty, named) in subtypes {
+        let sub_ty_name = ty_rename_table.rename(&ty);
+        let sub_ty_name = TyName::new(sub_ty_name);
+
+        if named {
+            let variant_ty_const = TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
+            let res = variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
+            assert!(res.is_none());
+        } else {
+            let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
+            assert!(res.is_none());
+        }
     }
 
+    (
+        Enum {
+            name: name.clone(),
+            variants,
+        }
+        .into(),
+        vec![],
+        vec![], // TODO: Add attr
+    )
+}
+
+fn main() {
     let lang = tree_sitter_rust::language();
 
     let nodes = serde_json::from_str::<Vec<node::Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
-    let nodes: Vec<_> = nodes
-        .into_iter()
-        .filter(|x| x.named)
-        .map(Input::Node)
-        .collect();
+    let nodes: Vec<_> = nodes.into_iter().filter(|x| x.named).collect();
 
     let prelude = r#"
 use std::{
@@ -346,211 +364,163 @@ where
 
     let mut declarations: HashMap<TyName, TyDefBare> = HashMap::with_capacity(nodes.len());
 
-    build_types_with_defer(&mut declarations, nodes, |declarations, input| {
-        match input {
-            Input::FieldValues { name, subtypes } => {
-                println!("// Processing field '{name}'");
+    build_types_with_defer(&mut declarations, nodes, |declarations, node| {
+        let ty_name = ty_rename_table.rename(&node.ty);
+        println!("// Processing '{ty_name}' '{}'", node.ty);
 
-                let mut variants = BTreeMap::new();
-                for (ty, named) in subtypes {
-                    let sub_ty_name = ty_rename_table.rename(&ty);
-                    let sub_ty_name = TyName::new(sub_ty_name);
+        if node.subtypes.len() > 0 {
+            assert_eq!(node.fields.len(), 0);
+            let mut variants = BTreeMap::new();
 
-                    if *named {
-                        let variant_ty_const =
-                            TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
-                        let res =
-                            variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
-                        assert!(res.is_none());
-                    } else {
-                        let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
-                        assert!(res.is_none());
-                    }
+            for subtype in &node.subtypes {
+                let sub_ty_name = TyName::new(ty_rename_table.rename(&subtype.ty));
+                if subtype.named {
+                    let variant_ty_const = TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
+                    let res =
+                        variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
+                    assert!(res.is_none());
+                } else {
+                    let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
+                    assert!(res.is_none());
                 }
+            }
 
-                Ok((
-                    Enum {
-                        name: name.clone(),
-                        variants,
+            return Ok((
+                Enum {
+                    name: TyName::new(ty_name),
+                    variants,
+                }
+                .into(),
+                vec![],
+                vec![], // TODO: Add attr
+            ));
+        }
+
+        let fields_ty: TyConstuctorIncomplete = if node.fields.len() > 0 {
+            let mut fields: Vec<_> = Vec::with_capacity(node.fields.len());
+
+            let mut pre_fields = node.fields.iter().collect::<Vec<_>>();
+            pre_fields.sort_by_key(|x| x.0);
+            for (field_name, field) in pre_fields {
+                let ty_name = match field.types.as_slice() {
+                    [] => TyName::new("()".to_string()),
+                    [single_type] => TyName::new(ty_rename_table.rename(&single_type.ty)),
+                    types => {
+                        let name = format!("{}_{}", ty_name, field_name);
+
+                        let sub_ty_name = TyName::new(name.clone());
+                        let v = build_variant_type(
+                            &mut ty_rename_table,
+                            sub_ty_name.clone(),
+                            types.iter().map(|x| (x.ty.clone(), x.named)).collect(),
+                        );
+                        let res = declarations.insert(sub_ty_name.clone(), v);
+                        assert!(res.is_none());
+                        sub_ty_name
+                    }
+                };
+
+                let field_ty = if field.multiple {
+                    TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), None)
+                } else {
+                    if field.required {
+                        TyConstuctorIncomplete::new_simple(ty_name)
+                    } else {
+                        TyConstuctorIncomplete::new(("Option<".into(), ty_name, ">".into()), None)
+                    }
+                };
+
+                fields.push(field_ty);
+            }
+
+            let field_ty_name = format!("{ty_name}Fields");
+            // println!("impl<'a> {}<'a> {{", ty_name);
+            for (i, field) in fields.iter().enumerate() {
+                // println!(
+                //     "    pub fn fields(&self) -> {} {{ {} }}",
+                //     field_ty_name,
+                //     field.cast_ty(&format!("self.{i}"))
+                // );
+            }
+            // println!("}}");
+
+            let contents = Container::Tuple(fields);
+
+            let res = declarations.insert(
+                TyName::new(field_ty_name.clone()),
+                (
+                    Struct {
+                        name: TyName::new(field_ty_name.clone()),
+                        contents,
                     }
                     .into(),
                     vec![],
                     vec![], // TODO: Add attr
-                ))
-            }
-            Input::Node(node) => {
-                let ty_name = ty_rename_table.rename(&node.ty);
-                println!("// Processing '{ty_name}' '{}'", node.ty);
+                ),
+            );
+            assert!(res.is_none());
 
-                if node.subtypes.len() > 0 {
-                    assert_eq!(node.fields.len(), 0);
-                    let mut variants = BTreeMap::new();
+            TyConstuctorIncomplete::new_simple(TyName::new(field_ty_name.into()))
+        } else {
+            TyConstuctor::new_simple(TyName::new("()".into()), vec![]).into()
+        };
 
-                    for subtype in &node.subtypes {
-                        let sub_ty_name = TyName::new(ty_rename_table.rename(&subtype.ty));
-                        if subtype.named {
-                            let variant_ty_const =
-                                TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
-                            let res = variants
-                                .insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
-                            assert!(res.is_none());
-                        } else {
-                            let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
-                            assert!(res.is_none());
-                        }
-                    }
+        let node_ty: TyConstuctorIncomplete =
+            TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
 
-                    return Ok((
-                        Enum {
-                            name: TyName::new(ty_name),
-                            variants,
-                        }
-                        .into(),
-                        vec![],
-                        vec![], // TODO: Add attr
-                    ));
-                }
+        let generic_node_ty =
+            TyConstuctor::new_simple(TyName::new("GenericNode".into()), vec!["a".into()]).into();
 
-                let fields_ty: TyConstuctorIncomplete = if node.fields.len() > 0 {
-                    let mut fields: Vec<_> = Vec::with_capacity(node.fields.len());
+        let node_id = lang.id_for_node_kind(&node.ty, true);
+        let generic_node_parts = Impl::new([
+            "impl".into(),
+            ImplInstruction::DeclareLifetimes,
+            " ".into(),
+            ImplInstruction::TyConstructor(generic_node_ty),
+            " for ".into(),
+            ImplInstruction::SelfType,
+            " { const NODE_ID: u16 = ".into(),
+            format!("{node_id}").into(),
+            "; const NODE_KIND: &'static str = \"".into(),
+            format!("{}", node.ty.escape_default()).into(),
+            "\"; type Fields = ".into(),
+            ImplInstruction::TyConstructor(fields_ty),
+            "; fn inner_node(&self) -> &".into(),
+            ImplInstruction::TyConstructor(node_ty.clone()),
+            " { &self.0 } fn inner_node_mut(&mut self) -> &mut ".into(),
+            ImplInstruction::TyConstructor(node_ty.clone()),
+            " { &mut self.0 } fn downcast(value: ".into(),
+            ImplInstruction::TyConstructor(node_ty.clone()),
+            ") -> Result<Self, ".into(),
+            ImplInstruction::TyConstructor(node_ty.clone()),
+            "> { if value.kind_id() == Self::NODE_ID { Ok(Self(value)) } else { Err(value) } } }".into(),
+        ].to_vec());
 
-                    let mut pre_fields = node.fields.iter().collect::<Vec<_>>();
-                    pre_fields.sort_by_key(|x| x.0);
-                    for (field_name, field) in pre_fields {
-                        let ty_name = match field.types.as_slice() {
-                            [] => TyName::new("()".to_string()),
-                            [single_type] => TyName::new(ty_rename_table.rename(&single_type.ty)),
-                            types => {
-                                let name = format!("{}_{}", ty_name, field_name);
-
-                                let sub_ty_name = TyName::new(name.clone());
-                                if let Some(ty_def) = declarations.get(&sub_ty_name) {
-                                    ty_def.0.name()
-                                } else {
-                                    // dbg!(declarations.keys().collect::<Vec<_>>());
-                                    return Err(BuildTypeResult::DeclareFirst {
-                                        defer_ty_name: sub_ty_name.clone(),
-                                        append: Input::FieldValues {
-                                            name: sub_ty_name,
-                                            subtypes: types
-                                                .iter()
-                                                .map(|x| (x.ty.clone(), x.named))
-                                                .collect(),
-                                        },
-                                    });
-                                }
-                            }
-                        };
-
-                        let field_ty = if field.multiple {
-                            TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), None)
-                        } else {
-                            if field.required {
-                                TyConstuctorIncomplete::new_simple(ty_name)
-                            } else {
-                                TyConstuctorIncomplete::new(
-                                    ("Option<".into(), ty_name, ">".into()),
-                                    None,
-                                )
-                            }
-                        };
-
-                        fields.push(field_ty);
-                    }
-
-                    let field_ty_name = format!("{ty_name}Fields");
-                    // println!("impl<'a> {}<'a> {{", ty_name);
-                    for (i, field) in fields.iter().enumerate() {
-                        // println!(
-                        //     "    pub fn fields(&self) -> {} {{ {} }}",
-                        //     field_ty_name,
-                        //     field.cast_ty(&format!("self.{i}"))
-                        // );
-                    }
-                    // println!("}}");
-
-                    let contents = Container::Tuple(fields);
-
-                    let res = declarations.insert(
-                        TyName::new(field_ty_name.clone()),
-                        (
-                            Struct {
-                                name: TyName::new(field_ty_name.clone()),
-                                contents,
-                            }
-                            .into(),
-                            vec![],
-                            vec![], // TODO: Add attr
-                        ),
-                    );
-                    assert!(res.is_none());
-
-                    TyConstuctorIncomplete::new_simple(TyName::new(field_ty_name.into()))
-                } else {
-                    TyConstuctor::new_simple(TyName::new("()".into()), vec![]).into()
-                };
-
-                let node_ty: TyConstuctorIncomplete =
-                    TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
-
-                let generic_node_ty =
-                    TyConstuctor::new_simple(TyName::new("GenericNode".into()), vec!["a".into()])
-                        .into();
-
-                let node_id = lang.id_for_node_kind(&node.ty, true);
-                let generic_node_parts = Impl::new([
-                    "impl".into(),
-                    ImplInstruction::DeclareLifetimes,
-                    " ".into(),
-                    ImplInstruction::TyConstructor(generic_node_ty),
-                    " for ".into(),
-                    ImplInstruction::SelfType,
-                    " { const NODE_ID: u16 = ".into(),
-                    format!("{node_id}").into(),
-                    "; const NODE_KIND: &'static str = \"".into(),
-                    format!("{}", node.ty.escape_default()).into(),
-                    "\"; type Fields = ".into(),
-                    ImplInstruction::TyConstructor(fields_ty),
-                    "; fn inner_node(&self) -> &".into(),
-                    ImplInstruction::TyConstructor(node_ty.clone()),
-                    " { &self.0 } fn inner_node_mut(&mut self) -> &mut ".into(),
-                    ImplInstruction::TyConstructor(node_ty.clone()),
-                    " { &mut self.0 } fn downcast(value: ".into(),
-                    ImplInstruction::TyConstructor(node_ty.clone()),
-                    ") -> Result<Self, ".into(),
-                    ImplInstruction::TyConstructor(node_ty.clone()),
-                    "> { if value.kind_id() == Self::NODE_ID { Ok(Self(value)) } else { Err(value) } } }".into(),
-                ].to_vec());
-
-                let deserialize_node_ty = TyConstuctor::new_simple(
-                    TyName::new("DeserializeNode".into()),
-                    vec!["a".into()],
-                )
+        let deserialize_node_ty =
+            TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), vec!["a".into()])
                 .into();
 
-                let deserialize_node_parts = Impl::new([
-                    "impl".into(),
-                    ImplInstruction::DeclareLifetimes,
-                    " ".into(),
-                    ImplInstruction::TyConstructor(deserialize_node_ty),
-                    " for ".into(),
-                    ImplInstruction::SelfType,
-                    " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_current(tree) } }".into()
-                ].to_vec());
+        let deserialize_node_parts = Impl::new([
+            "impl".into(),
+            ImplInstruction::DeclareLifetimes,
+            " ".into(),
+            ImplInstruction::TyConstructor(deserialize_node_ty),
+            " for ".into(),
+            ImplInstruction::SelfType,
+            " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_current(tree) } }".into()
+        ].to_vec());
 
-                let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
+        let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
 
-                Ok((
-                    Struct {
-                        name: TyName::new(ty_name),
-                        contents: Container::Tuple(vec![node_ty.clone().into()]),
-                    }
-                    .into(),
-                    vec![generic_node_parts, deserialize_node_parts],
-                    attr,
-                ))
+        Ok((
+            Struct {
+                name: TyName::new(ty_name),
+                contents: Container::Tuple(vec![node_ty.clone().into()]),
             }
-        }
+            .into(),
+            vec![generic_node_parts, deserialize_node_parts],
+            attr,
+        ))
     });
 
     let mut declarations_incomplete: BTreeMap<TyName, TyDefBare> =
