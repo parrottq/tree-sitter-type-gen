@@ -118,6 +118,12 @@ impl TyName {
     }
 }
 
+impl AsRef<str> for TyName {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 impl fmt::Display for TyName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
