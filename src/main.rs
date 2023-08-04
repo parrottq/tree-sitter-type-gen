@@ -142,7 +142,6 @@ fn build_types_with_defer<T>(
 }
 
 fn main() {
-
     #[derive(Debug)]
     enum Input {
         Node(node::Node),
@@ -161,12 +160,12 @@ fn main() {
         .map(Input::Node)
         .collect();
 
-    let prelude = "
+    let prelude = r#"
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
-use tree_sitter::Node;
+use tree_sitter::{Node, TreeCursor};
 
 pub trait GenericNode<'a> {
     const NODE_ID: u16;
@@ -215,7 +214,96 @@ where
         self.0.inner_node_mut()
     }
 }
-    "
+
+pub trait DeserializeNode<'a> {
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self;
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self;
+}
+
+fn default_deserialize_at_root<'a, T>(tree: &mut TreeCursor<'a>) -> T
+where
+    T: DeserializeNode<'a> + GenericNode<'a>,
+{
+    if tree.goto_first_child() {
+        let res = T::deserialize_at_current(tree);
+        let has_sibling = tree.goto_next_sibling();
+        debug_assert!(!has_sibling);
+        let has_parent = tree.goto_parent();
+        debug_assert!(has_parent);
+        res
+    } else {
+        panic!("Tried to deserialize '{}' but no child of type '{}' is present", tree.node().kind(), T::NODE_KIND);
+    }
+}
+
+fn default_deserialize_at_current<'a, T>(tree: &mut TreeCursor<'a>) -> T
+where
+    T: DeserializeNode<'a> + GenericNode<'a>,
+{
+    T::downcast(tree.node()).unwrap()
+}
+
+impl<'a, T> DeserializeNode<'a> for Option<T>
+where
+    T: DeserializeNode<'a>,
+{
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self {
+        if tree.goto_first_child() {
+            let res = Self::deserialize_at_current(tree);
+            let has_sibling = tree.goto_next_sibling();
+            debug_assert!(!has_sibling);
+            let has_parent = tree.goto_parent();
+            debug_assert!(has_parent);
+            res
+        } else {
+            None
+        }
+    }
+
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self {
+        Some(T::deserialize_at_current(tree))
+    }
+}
+
+impl<'a> DeserializeNode<'a> for () {
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self {
+        let has_child = tree.goto_first_child();
+        dbg!(!has_child);
+    }
+
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self {
+        // This makes it possible to count children without copying nodes by deserializing into 'Vec<()>'
+        ()
+    }
+}
+
+impl<'a, T> DeserializeNode<'a> for Vec<T>
+where
+    T: DeserializeNode<'a>,
+{
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self {
+        if tree.goto_first_child() {
+            let res = Self::deserialize_at_current(tree);
+            let has_parent = tree.goto_parent();
+            debug_assert!(has_parent);
+            res
+        } else {
+            vec![]
+        }
+    }
+
+    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self {
+        let mut nodes = Vec::new();
+        loop {
+            nodes.push(T::deserialize_at_current(tree));
+
+            if !tree.goto_next_sibling() {
+                break nodes;
+            }
+        }
+    }
+}
+    "#
     .trim();
     println!("{}", prelude);
 
@@ -406,8 +494,7 @@ where
                         .into();
 
                 let node_id = lang.id_for_node_kind(&node.ty, true);
-                let generic_node_parts =
-                Impl::new([
+                let generic_node_parts = Impl::new([
                     "impl".into(),
                     ImplInstruction::DeclareLifetimes,
                     " ".into(),
@@ -431,13 +518,30 @@ where
                     "> { if value.kind_id() == Self::NODE_ID { Ok(Self(value)) } else { Err(value) } } }".into(),
                 ].to_vec());
 
+                let deserialize_node_ty = TyConstuctor::new_simple(
+                    TyName::new("DeserializeNode".into()),
+                    vec!["a".into()],
+                )
+                .into();
+
+                let deserialize_node_parts = Impl::new([
+                    "impl".into(),
+                    ImplInstruction::DeclareLifetimes,
+                    " ".into(),
+                    ImplInstruction::TyConstructor(deserialize_node_ty),
+                    " for ".into(),
+                    ImplInstruction::SelfType,
+                    " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Self { default_deserialize_at_current(tree) } }".into()
+                ].to_vec());
+
+
                 Ok((
                     Struct {
                         name: TyName::new(ty_name),
                         contents: Container::Tuple(vec![node_ty.clone().into()]),
                     }
                     .into(),
-                    vec![generic_node_parts],
+                    vec![generic_node_parts, deserialize_node_parts],
                 ))
             }
         }
