@@ -1,4 +1,3 @@
-
 pub const PRELUDE: &str = r#"
 use std::{
     marker::PhantomData,
@@ -12,7 +11,7 @@ pub trait GenericNode<'a>
 where
     Self::Child: DeserializeNode<'a>,
 {
-    const NODE_ID: u16;
+    const NODE_ID_SET: IntU16Set;
     const NODE_KIND: &'static str;
     const NAMED: bool;
 
@@ -213,4 +212,89 @@ where
             }
         }
     }
-}"#;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IntU16Set {
+    Value(u16),
+    Range(u16, u16),
+    StaticSorted(&'static [u16]),
+}
+
+impl IntU16Set {
+    #[inline]
+    pub const fn contains(&self, value: u16) -> bool {
+        match self {
+            IntU16Set::Value(e) => *e == value,
+            IntU16Set::Range(lower, upper) => {
+                let lower = *lower;
+                let upper = *upper;
+                lower <= value && value <= upper
+            }
+            IntU16Set::StaticSorted(lst) => {
+                // Need to use a recusive solution so that it works in const context.
+                // Tail call optimization will turn this into a loop in non-const context.
+                // I also tried a binary search version but the generated code was
+                // worst when there are only a few values (which is most of the time).
+                const fn recursive_search(lst: &[u16], value: u16) -> bool {
+                    match lst {
+                        [first, rest @ ..] => {
+                            if (*first) == value {
+                                true
+                            } else {
+                                recursive_search(rest, value)
+                            }
+                        }
+                        [] => false,
+                    }
+                }
+                recursive_search(lst, value)
+            }
+        }
+    }
+
+    pub fn iter(&self) -> IntU16SetIter {
+        IntU16SetIter(*self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IntU16SetIter(IntU16Set);
+
+impl Iterator for IntU16SetIter {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            IntU16Set::Value(value) => {
+                let value = *value;
+                self.0 = IntU16Set::StaticSorted(&[]);
+                Some(value)
+            }
+            IntU16Set::Range(lower, upper) => {
+                let next_lower = *lower + 1;
+                let lower = *lower;
+                let upper = *upper;
+
+                debug_assert!(lower < upper, "Upper range values should always be larger than lower range");
+
+                if next_lower < upper {
+                    self.0 = IntU16Set::Range(next_lower, upper);
+                } else {
+                    self.0 = IntU16Set::Value(next_lower);
+                }
+                Some(lower)
+            }
+            IntU16Set::StaticSorted(slice) => match slice {
+                [value, rest @ ..] => {
+                    let value = *value;
+                    self.0 = IntU16Set::StaticSorted(rest);
+                    Some(value)
+                }
+                [] => None,
+            },
+        }
+    }
+}
+
+"#;

@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    fmt::Write,
 };
 
 use convert_case::{Case, Casing};
@@ -48,6 +49,51 @@ where
         if let Some(_) = self.0.insert(ty_src, ty_dst) {
             panic!()
         }
+    }
+}
+
+fn make_node_id_set(ids: &[u16]) -> String {
+    // Collecting into 'BTreeSet' sorts and removed duplicates
+    let mut ids = ids.iter().copied().collect::<BTreeSet<_>>();
+
+    assert!(ids.len() > 0, "Node must have at least one id");
+
+    if ids.len() == 1 {
+        return format!("IntU16Set::Value({})", ids.first().unwrap());
+    }
+
+    let mut tailing_iter = ids.iter();
+    let mut leading_iter = ids.iter();
+    leading_iter.next().unwrap(); // ids should have at least one value here
+
+    let mut is_contiguous = true;
+    while let (Some(tailing), Some(leading)) = (tailing_iter.next(), leading_iter.next()) {
+        if (leading - tailing) == 1 {
+            continue;
+        } else {
+            is_contiguous = false;
+            break;
+        }
+    }
+
+    if is_contiguous {
+        format!(
+            "IntU16Set::Range({}, {})",
+            ids.pop_first().unwrap(),
+            ids.pop_last().unwrap()
+        )
+    } else {
+        let mut s = String::from("IntU16Set::StaticSorted(&[");
+
+        for (i, id) in ids.iter().copied().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            write!(s, "{}", id).unwrap();
+        }
+
+        s.push_str("])");
+        s
     }
 }
 
@@ -203,6 +249,19 @@ fn main() {
                 }
             });
     });
+
+    let mut kind_id_lookup: HashMap<TypeIdent, Vec<u16>> =
+        HashMap::with_capacity(lang.node_kind_count());
+    for id in 0..lang.node_kind_count().try_into().unwrap() {
+        let kind = lang
+            .node_kind_for_id(id)
+            .expect("Node kind id not present within id range");
+        let is_named = lang.node_kind_is_named(id);
+
+        let ident = TypeIdent::new(kind, is_named);
+        let res = kind_id_lookup.entry(ident).or_default();
+        res.push(id);
+    }
 
     let mut counts: BTreeMap<&str, (u8, u8)> = BTreeMap::new();
     for node in nodes.iter() {
@@ -372,7 +431,13 @@ fn main() {
         let generic_node_ty =
             TyConstuctor::new_simple(TyName::new("GenericNode".into()), vec!["a".into()]).into();
 
-        let node_id = lang.id_for_node_kind(&node.ident.ty, true);
+        let node_ids = kind_id_lookup.get(&node.ident).unwrap_or_else(|| {
+            panic!(
+                "ID for node '{}' was not in lookup table",
+                node.ident.ty.as_str()
+            )
+        });
+
         let generic_node_parts = Impl::new([
             "impl".into(),
             ImplInstruction::DeclareLifetimes,
@@ -380,8 +445,8 @@ fn main() {
             ImplInstruction::TyConstructor(generic_node_ty),
             " for ".into(),
             ImplInstruction::SelfType,
-            " { const NODE_ID: u16 = ".into(),
-            format!("{node_id}").into(),
+            " { const NODE_ID_SET: IntU16Set = ".into(),
+            make_node_id_set(node_ids.as_slice()).into(),
             "; const NODE_KIND: &'static str = \"".into(),
             format!("{}", node.ident.ty.escape_default()).into(),
             "\"; const NAMED: bool = ".into(),
@@ -396,7 +461,7 @@ fn main() {
             ImplInstruction::TyConstructor(node_ty.clone()),
             ") -> Result<Self, ".into(),
             ImplInstruction::TyConstructor(node_ty.clone()),
-            "> { if value.kind_id() == Self::NODE_ID { Ok(Self(value)) } else { Err(value) } } }".into(),
+            "> { if Self::NODE_ID_SET.contains(value.kind_id()) { Ok(Self(value)) } else { Err(value) } } }".into(),
         ].to_vec());
 
         let deserialize_node_ty =
