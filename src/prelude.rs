@@ -6,6 +6,8 @@ use std::{
 };
 use tree_sitter::{Node, TreeCursor};
 
+const DEBUG: bool = false;
+
 pub trait GenericNode<'a>
 where
     Self::Child: DeserializeNode<'a>,
@@ -82,6 +84,10 @@ fn default_deserialize_at_root<'a, T>(tree: &mut TreeCursor<'a>) -> Result<T, De
 where
     T: DeserializeNode<'a>
 {
+    if DEBUG {
+        let root_default_name = core::any::type_name::<T>();
+        dbg!(root_default_name);
+    }
     if tree.goto_first_child() {
         let res = T::deserialize_at_current(tree);
         let has_sibling = tree.goto_next_sibling();
@@ -98,6 +104,10 @@ fn default_deserialize_at_current<'a, T>(tree: &mut TreeCursor<'a>) -> Result<T,
 where
     T: DeserializeNode<'a> + GenericNode<'a>,
 {
+    if DEBUG {
+        let curr_default_name = core::any::type_name::<T>();
+        dbg!(curr_default_name);
+    }
     T::downcast(tree.node()).map_err(|_| DeserializeError::WrongType)
 }
 
@@ -105,6 +115,10 @@ fn variants_deserialize_at_current<'a, const N: usize, T>(
     tree: &mut TreeCursor<'a>,
     variant_funs: [fn(&mut TreeCursor<'a>) -> Result<T, DeserializeError>; N]
 ) -> Result<T, DeserializeError> {
+    if DEBUG {
+        let curr_variant_name = core::any::type_name::<T>();
+        dbg!(curr_variant_name);
+    }
     for variant_fun in variant_funs {
         match variant_fun(tree) {
             Ok(node) => return Ok(node),
@@ -121,6 +135,10 @@ where
     T: DeserializeNode<'a>,
 {
     fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        if DEBUG {
+            let root_opt_name = core::any::type_name::<Self>();
+            dbg!(root_opt_name);
+        }
         if tree.goto_first_child() {
             let res = Self::deserialize_at_current(tree);
             let has_sibling = tree.goto_next_sibling();
@@ -134,18 +152,30 @@ where
     }
 
     fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        if DEBUG {
+            let curr_opt_name = core::any::type_name::<Self>();
+            dbg!(curr_opt_name);
+        }
         Ok(Some(T::deserialize_at_current(tree)?))
     }
 }
 
 impl<'a> DeserializeNode<'a> for () {
     fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        if DEBUG {
+            let root_unit_name = core::any::type_name::<Self>();
+            dbg!(root_unit_name);
+        }
         let has_child = tree.goto_first_child();
         dbg!(!has_child);
         Ok(())
     }
 
     fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        if DEBUG {
+            let curr_unit_name = core::any::type_name::<Self>();
+            dbg!(curr_unit_name);
+        }
         // This makes it possible to count children without copying nodes by deserializing into 'Vec<()>'
         Ok(())
     }
@@ -156,6 +186,10 @@ where
     T: DeserializeNode<'a>,
 {
     fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        if DEBUG {
+            let root_vec_name = core::any::type_name::<Self>();
+            dbg!(root_vec_name);
+        }
         if tree.goto_first_child() {
             let res = Self::deserialize_at_current(tree);
             let has_parent = tree.goto_parent();
@@ -167,6 +201,10 @@ where
     }
 
     fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+        if DEBUG {
+            let curr_vec_name = core::any::type_name::<Self>();
+            dbg!(curr_vec_name);
+        }
         let mut nodes = Vec::new();
         loop {
             nodes.push(T::deserialize_at_current(tree)?);
@@ -176,5 +214,4 @@ where
             }
         }
     }
-}
-    "#;
+}"#;
