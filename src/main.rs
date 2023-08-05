@@ -189,6 +189,7 @@ fn main() {
     // assert!(flagged_count == 0, "Found overlapping type names");
 
     // TODO: Check for overlapping names explicitly
+    // TODO: Use more uniform symbol sanitizer
     let mut ty_rename_table = RenameTable::new(|x| match x.ty.as_ref() {
         "_" => "Base".into(),
         _ => format!(
@@ -307,7 +308,7 @@ fn main() {
             continue;
         }
 
-        let fields_ty: TyConstuctorIncomplete = if node.fields.len() > 0 {
+        if node.fields.len() > 0 {
             let fields: Vec<_> = node
                 .fields
                 .iter()
@@ -319,8 +320,6 @@ fn main() {
                 .collect();
 
             // TODO: Implement field access
-            let field_ty_name = format!("{ty_name}Fields");
-            // println!("impl<'a> {}<'a> {{", ty_name);
             for (i, field) in fields.iter().enumerate() {
                 // println!(
                 //     "    pub fn fields(&self) -> {} {{ {} }}",
@@ -328,28 +327,7 @@ fn main() {
                 //     field.cast_ty(&format!("self.{i}"))
                 // );
             }
-            // println!("}}");
-
-            let contents = Container::Tuple(fields);
-
-            let res = declarations.insert(
-                TyName::new(field_ty_name.clone()),
-                (
-                    Struct {
-                        name: TyName::new(field_ty_name.clone()),
-                        contents,
-                    }
-                    .into(),
-                    vec![],
-                    vec![], // TODO: Add attr
-                ),
-            );
-            assert!(res.is_none());
-
-            TyConstuctorIncomplete::new_simple(TyName::new(field_ty_name.into()))
-        } else {
-            TyConstuctor::new_simple(TyName::new("()".into()), vec![]).into()
-        };
+        }
 
         let node_ty: TyConstuctorIncomplete =
             TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
@@ -371,8 +349,6 @@ fn main() {
             format!("{}", node.ident.ty.escape_default()).into(),
             "\"; const NAMED: bool = ".into(),
             format!("{}", node.ident.named).into(),
-            "; type Fields = ".into(),
-            ImplInstruction::TyConstructor(fields_ty),
             "; type Child = ".into(),
             ImplInstruction::TyConstructor(child_ty),
             "; fn inner_node(&self) -> &".into(),

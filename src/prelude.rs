@@ -16,7 +16,6 @@ where
     const NODE_KIND: &'static str;
     const NAMED: bool;
 
-    type Fields;
     type Child;
 
     fn inner_node(&self) -> &Node<'a>;
