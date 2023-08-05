@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, BTreeMap, HashMap},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
 };
 
 use convert_case::{Case, Casing};
@@ -161,9 +161,48 @@ fn build_field_type<'a>(
 }
 
 fn main() {
+    const DEBUG: bool = false;
+
     let lang = tree_sitter_rust::language();
 
-    let nodes = serde_json::from_str::<Vec<Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
+    let mut nodes = serde_json::from_str::<Vec<Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
+
+    let extras = vec![
+        TypeIdent::new("line_comment", true),
+        TypeIdent::new("block_comment", true),
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>();
+
+    // Add extras to all named nodes
+    nodes.iter_mut().for_each(|n| {
+        n.fields
+            .iter_mut()
+            .map(|(name, field)| (Some(name), field))
+            .chain(n.children.iter_mut().map(|x| (None, x)))
+            .for_each(|(field_name, ident)| {
+                // I think you only need to add to fields that have multiple since otherwise the node won't be parse (?)
+                if ident.multiple {
+                    let mut missing_extras = extras.clone();
+                    ident.types.iter().for_each(|extra| {
+                        missing_extras.remove(extra);
+                    });
+                    if missing_extras.len() > 0 {
+                        if DEBUG {
+                            println!(
+                                "// {}{} added {:?}",
+                                n.ident.ty,
+                                field_name
+                                    .map(|x| format!("::{x}"))
+                                    .unwrap_or(String::new()),
+                                missing_extras
+                            );
+                        }
+                    }
+                    ident.types.extend(missing_extras);
+                }
+            });
+    });
 
     let mut counts: BTreeMap<&str, (u8, u8)> = BTreeMap::new();
     for node in nodes.iter() {
@@ -276,8 +315,6 @@ fn main() {
     }
 
     let mut declarations: HashMap<TyName, TyDefBare> = HashMap::with_capacity(nodes.len());
-
-    const DEBUG: bool = false;
 
     for node in nodes.iter() {
         let ty_name = ty_rename_table.rename(&node.ident).to_string();
