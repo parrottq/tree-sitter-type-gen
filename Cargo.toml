@@ -8,4 +8,5 @@ convert_case = "0.6.0"
 indexmap = { version = "2.0.0", features = ["serde"] }
 serde = { version = "1.0.180", features = ["derive"] }
 serde_json = { version = "1.0.104", features = ["preserve_order"] }
+syn = "2.0.28"
 tree-sitter-rust = "0.20.3"

@@ -1,6 +1,6 @@
 use std::{
+    borrow::Cow,
     collections::{hash_map::Entry, BTreeMap, HashMap},
-    fmt::Debug,
 };
 
 use convert_case::{Case, Casing};
@@ -12,51 +12,42 @@ use lang_gen::{
     Container, ContainerDef, Enum, Impl, ImplInstruction, IntoCompleted, Struct, TyConstuctor,
     TyConstuctorIncomplete, TyName, TypeDef,
 };
-use node::Field;
+use node::{Field, TypeIdent};
 
-fn rename_type(ty_name: &str) -> String {
-    match ty_name {
-        "_" => "Base".into(),
-        _ => ty_name.from_case(Case::Snake).to_case(Case::Pascal),
-    }
-}
+use crate::node::Node;
 
-#[derive(Debug, Default, Clone)]
-struct RenameTable<T>(HashMap<String, String>, T)
+#[derive(Default, Clone)]
+struct RenameTable<T>(HashMap<TypeIdent, Cow<'static, str>>, T)
 where
-    T: FnMut(&str) -> String;
+    T: FnMut(&TypeIdent) -> Cow<'static, str>;
 
 impl<T> RenameTable<T>
 where
-    T: FnMut(&str) -> String,
+    T: FnMut(&TypeIdent) -> Cow<'static, str>,
 {
     fn new(convert: T) -> Self {
         Self(Default::default(), convert)
     }
 
-    fn rename(&mut self, ty_name: &str) -> String {
+    fn rename<'a>(&'a mut self, ty_name: &TypeIdent) -> Cow<'static, str> {
         if let Some(e) = self.0.get(ty_name) {
             return e.clone();
         }
 
-        match self.0.entry(ty_name.to_owned()) {
+        match self.0.entry(ty_name.clone()) {
             Entry::Occupied(_) => unreachable!(),
             Entry::Vacant(entry) => {
-                let ty_new = (self.1)(ty_name);
+                let ty_new = (self.1)(entry.key());
                 entry.insert(ty_new).clone()
             }
         }
     }
 
-    fn insert_rename(&mut self, ty_src: String, ty_dst: String) {
+    fn insert_rename(&mut self, ty_src: TypeIdent, ty_dst: Cow<'static, str>) {
         if let Some(_) = self.0.insert(ty_src, ty_dst) {
             panic!()
         }
     }
-}
-
-enum BuildTypeResult {
-    Error(String),
 }
 
 // TODO: Roll this into TypeDef?
@@ -66,117 +57,92 @@ type TyDefBare = (
     Vec<&'static str>,
 );
 
-fn build_types_with_defer<T>(
-    definitions: &mut HashMap<TyName, TyDefBare>,
-    mut inputs: Vec<T>,
-    mut fun: impl FnMut(&mut HashMap<TyName, TyDefBare>, &T) -> Result<TyDefBare, BuildTypeResult>,
-) where
-    T: Debug,
-{
-    const DEBUG: bool = false;
-
-    let inputs_len = inputs.len();
-    let mut deferals: HashMap<TyName, Vec<T>> = Default::default();
-    let mut errors = vec![];
-
-    while let Some(input) = inputs.pop() {
-        if DEBUG {
-            println!(
-                "// deferals({}) errors({}) inputs({})",
-                deferals.len(),
-                errors.len(),
-                inputs.len()
-            );
-        }
-
-        match fun(definitions, &input) {
-            Ok(ty_def) => {
-                if DEBUG {
-                    println!("// Ok");
-                }
-                let ty_name = ty_def.0.name();
-
-                if let Some(deferals) = deferals.remove(&ty_name) {
-                    inputs.extend(deferals)
-                }
-
-                let res = definitions.insert(ty_name, ty_def);
-                assert!(res.is_none());
-            }
-            Err(BuildTypeResult::Error(err)) => {
-                if DEBUG {
-                    println!("// Error {err}");
-                };
-                errors.push(err)
-            }
-        }
-    }
-
-    if !errors.is_empty() {
-        dbg!(&errors);
-        panic!(
-            "Errors while processing types total({inputs_len}) errors({})",
-            errors.len()
-        );
-    }
-
-    if !deferals.is_empty() {
-        dbg!(deferals.keys().collect::<Vec<_>>());
-        panic!(
-            "Not all declarations processed total({inputs_len}) left({})",
-            deferals.len()
-        );
-    }
-}
-
-fn build_variant_type(
-    ty_rename_table: &mut RenameTable<impl FnMut(&str) -> String>,
-    name: TyName,
-    subtypes: Vec<(String, bool)>,
+fn build_variant_type<'a>(
+    ty_rename_table: &mut RenameTable<impl FnMut(&TypeIdent) -> Cow<'static, str>>,
+    ty_name: TyName,
+    subtypes: &'a [TypeIdent],
 ) -> TyDefBare {
     let mut variants = BTreeMap::new();
-    for (ty, named) in subtypes {
-        let sub_ty_name = ty_rename_table.rename(&ty);
-        let sub_ty_name = TyName::new(sub_ty_name);
+    for sub_ty in subtypes {
+        let sub_ty_name = TyName::new(ty_rename_table.rename(sub_ty).to_string());
 
-        if named {
-            let variant_ty_const = TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
-            let res = variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
-            assert!(res.is_none());
-        } else {
-            let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
-            assert!(res.is_none());
-        }
+        let variant_ty_const = TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
+        let res = variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
+        assert!(res.is_none());
     }
+
+    let deserialize_node_parts = Impl::new({
+        let deserialize_node_ty =
+            TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), vec!["a".into()])
+                .into();
+
+        let front_parts = [
+                    "impl".into(),
+                    ImplInstruction::DeclareLifetimes,
+                    " ".into(),
+                    ImplInstruction::TyConstructor(deserialize_node_ty),
+                    " for ".into(),
+                    ImplInstruction::SelfType,
+                    " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { let variant_funs: [fn(&mut TreeCursor<'a>) -> Result<Self, DeserializeError>; ".into(),
+                    format!("{}", subtypes.len()).into(),
+                    "] = [ ".into()
+                ];
+
+        let variant_function_parts = subtypes
+            .iter()
+            .map(|variant_name| {
+                let variant_name = ty_rename_table.rename(variant_name).to_string();
+
+                [
+                    "|tree| Ok(".into(),
+                    ty_name.as_ref().to_owned().into(),
+                    "::".into(),
+                    variant_name.clone().into(),
+                    "(".into(),
+                    variant_name.into(),
+                    "::deserialize_at_current(tree)?)), ".into(),
+                ]
+            })
+            .flatten();
+
+        let back_part = ["]; variants_deserialize_at_current(tree, variant_funs) } }".into()];
+
+        front_parts
+            .into_iter()
+            .chain(variant_function_parts)
+            .chain(back_part.into_iter())
+            .collect()
+    });
 
     (
         Enum {
-            name: name.clone(),
+            name: ty_name.clone(),
             variants,
         }
         .into(),
-        vec![],
+        vec![deserialize_node_parts],
         vec![], // TODO: Add attr
     )
 }
 
-fn build_field_type(
+fn build_field_type<'a>(
     declarations: &mut HashMap<TyName, TyDefBare>,
-    ty_rename_table: &mut RenameTable<impl FnMut(&str) -> String>,
-    field: &Field,
+    ty_rename_table: &mut RenameTable<impl FnMut(&TypeIdent) -> Cow<'static, str>>,
+    field: &'a Field,
     variant_type_name_fun: impl FnOnce() -> TyName,
 ) -> TyConstuctorIncomplete {
     let (ty_name, lifetime) = match field.types.as_slice() {
         [] => (TyName::new("()".to_string()), Some(vec![])),
-        [single_type] => (TyName::new(ty_rename_table.rename(&single_type.ty)), None),
+        [single_type] => (
+            TyName::new(ty_rename_table.rename(single_type).to_string()),
+            None,
+        ),
         types => {
             let sub_ty_name = variant_type_name_fun();
-            let v = build_variant_type(
-                ty_rename_table,
+            let res = declarations.insert(
                 sub_ty_name.clone(),
-                types.iter().map(|x| (x.ty.clone(), x.named)).collect(),
+                build_variant_type(ty_rename_table, sub_ty_name.clone(), types),
             );
-            let res = declarations.insert(sub_ty_name.clone(), v);
             assert!(res.is_none());
             (sub_ty_name, None)
         }
@@ -196,9 +162,9 @@ fn build_field_type(
 fn main() {
     let lang = tree_sitter_rust::language();
 
-    let nodes = serde_json::from_str::<Vec<node::Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
-    let nodes: Vec<_> = nodes.into_iter().filter(|x| x.named).collect();
+    let nodes = serde_json::from_str::<Vec<Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
 
+    // TODO: Move into own file
     let prelude = r#"
 use std::{
     marker::PhantomData,
@@ -206,9 +172,13 @@ use std::{
 };
 use tree_sitter::{Node, TreeCursor};
 
-pub trait GenericNode<'a> {
+pub trait GenericNode<'a>
+where
+    Self::Child: DeserializeNode<'a>,
+{
     const NODE_ID: u16;
     const NODE_KIND: &'static str;
+    const NAMED: bool;
 
     type Fields;
     type Child;
@@ -218,9 +188,14 @@ pub trait GenericNode<'a> {
     fn downcast(value: Node<'a>) -> Result<Self, Node<'a>>
     where
         Self: Sized;
+
+    fn children(&self) -> Result<Self::Child, DeserializeError> {
+        Self::Child::deserialize_at_root(&mut self.inner_node().walk())
+    }
 }
 
-pub struct NodeTy<'a, T>(T, PhantomData<Node<'a>>)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeTy<'a, T>(pub T, pub PhantomData<Node<'a>>)
 where
     T: GenericNode<'a>;
 
@@ -292,6 +267,21 @@ where
     T::downcast(tree.node()).map_err(|_| DeserializeError::WrongType)
 }
 
+fn variants_deserialize_at_current<'a, const N: usize, T>(
+    tree: &mut TreeCursor<'a>,
+    variant_funs: [fn(&mut TreeCursor<'a>) -> Result<T, DeserializeError>; N]
+) -> Result<T, DeserializeError> {
+    for variant_fun in variant_funs {
+        match variant_fun(tree) {
+            Ok(node) => return Ok(node),
+            Err(DeserializeError::WrongType) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(DeserializeError::WrongType)
+}
+
 impl<'a, T> DeserializeNode<'a> for Option<T>
 where
     T: DeserializeNode<'a>,
@@ -355,59 +345,131 @@ where
 }
     "#
     .trim();
-    println!("{}", prelude);
 
-    let mut function_rename_table = RenameTable::new(|x| x.into());
-    function_rename_table.insert_rename("trait".into(), "trait_".into());
-    function_rename_table.insert_rename("type".into(), "type_".into());
-    function_rename_table.insert_rename("macro".into(), "macro_".into());
+    let mut counts: BTreeMap<&str, (u8, u8)> = BTreeMap::new();
+    for node in nodes.iter() {
+        let count = counts.entry(node.ident.ty.as_str()).or_insert((0, 0));
+        let count = if node.ident.named {
+            &mut count.0
+        } else {
+            &mut count.1
+        };
+        *count += 1;
+    }
 
-    let mut ty_rename_table = RenameTable::new(rename_type);
-    ty_rename_table.insert_rename("self".into(), "SelfTy".into());
-    ty_rename_table.insert_rename("!=".into(), "NotEqual".into());
-    ty_rename_table.insert_rename("%".into(), "Modulus".into());
-    ty_rename_table.insert_rename("&".into(), "BitwiseAnd".into());
-    ty_rename_table.insert_rename("&&".into(), "And".into());
-    ty_rename_table.insert_rename("*".into(), "Multiply".into());
-    ty_rename_table.insert_rename("+".into(), "Addition".into());
-    ty_rename_table.insert_rename("-".into(), "Subtract".into());
-    ty_rename_table.insert_rename("/".into(), "Divide".into());
-    ty_rename_table.insert_rename("<".into(), "LessThan".into());
-    ty_rename_table.insert_rename("<<".into(), "LeftShift".into());
-    ty_rename_table.insert_rename("<=".into(), "LessThanEqual".into());
-    ty_rename_table.insert_rename("==".into(), "Equal".into());
-    ty_rename_table.insert_rename(">".into(), "GreaterThan".into());
-    ty_rename_table.insert_rename(">=".into(), "GreaterThanEqual".into());
-    ty_rename_table.insert_rename(">>".into(), "RightShift".into());
-    ty_rename_table.insert_rename("^".into(), "Xor".into());
-    ty_rename_table.insert_rename("|".into(), "BitwiseOr".into());
-    ty_rename_table.insert_rename("||".into(), "Or".into());
-    ty_rename_table.insert_rename("%=".into(), "AssignModulus".into());
-    ty_rename_table.insert_rename("&=".into(), "AssignBitwiseAnd".into());
-    ty_rename_table.insert_rename("*=".into(), "AssignMultiply".into());
-    ty_rename_table.insert_rename("+=".into(), "AssignAddition".into());
-    ty_rename_table.insert_rename("-=".into(), "AssignSubtract".into());
-    ty_rename_table.insert_rename("/=".into(), "AssignDivide".into());
-    ty_rename_table.insert_rename("<<=".into(), "AssignLeftShift".into());
-    ty_rename_table.insert_rename(">>=".into(), "AssignRightShift".into());
-    ty_rename_table.insert_rename("^=".into(), "AssignXor".into());
-    ty_rename_table.insert_rename("|=".into(), "AssignOr".into());
+    let mut flagged_count = 0;
+    for (name, (t_count, f_count)) in counts {
+        assert!(t_count < 2);
+        assert!(f_count < 2);
+        if t_count > 0 && f_count > 0 {
+            flagged_count += 1;
+            // println!("{} (true: {}, false: {})", name, t_count, f_count);
+        }
+    }
+
+    // assert!(flagged_count == 0, "Found overlapping type names");
+
+    // TODO: Check for overlapping names explicitly
+    let mut ty_rename_table = RenameTable::new(|x| match x.ty.as_ref() {
+        "_" => "Base".into(),
+        _ => format!(
+            "{}{}",
+            x.ty.from_case(Case::Snake).to_case(Case::Pascal),
+            if x.named { "" } else { "Lit" }
+        )
+        .into(),
+    });
+
+    ty_rename_table.insert_rename(TypeIdent::new("!", false), "NotLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("!=", false), "NotEqualLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("self", true), "SelfTyLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("%", false), "ModulusLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("&", false), "BitwiseAndLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("&&", false), "AndLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("*", false), "MultiplyLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("+", false), "AdditionLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("-", false), "SubtractLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("/", false), "DivideLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("<", false), "LessThanLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("<<", false), "LeftShiftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("<=", false), "LessThanEqualLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("==", false), "EqualLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(">", false), "GreaterThanLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(">=", false), "GreaterThanEqualLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(">>", false), "RightShiftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("^", false), "XorLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("|", false), "BitwiseOrLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("||", false), "OrLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("%=", false), "AssignModulusLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("&=", false), "AssignBitwiseAndLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("*=", false), "AssignMultiplyLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("+=", false), "AssignAdditionLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("-=", false), "AssignSubtractLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("/=", false), "AssignDivideLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("<<=", false), "AssignLeftShiftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(">>=", false), "AssignRightShiftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("^=", false), "AssignXorLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("|=", false), "AssignOrLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("\"", false), "QuoteDoubleLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("#", false), "PoundLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("$", false), "DollarLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("'", false), "QuoteSingleLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("(", false), "ParenLeftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(")", false), "ParentRightLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(",", false), "CommaLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("->", false), "RArrowLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(".", false), "DotLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("..", false), "DotDotLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("...", false), "DotDotDotLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("..=", false), "DotDotEqLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(":", false), "ColonLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("::", false), "PathSepLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new(";", false), "SemiLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("=", false), "EqLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("=>", false), "FatArrowLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("?", false), "QuestionLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("@", false), "AtLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("[", false), "BracketLeftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("]", false), "BracketRightLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("macro_rules!", false), "MacroRuleLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("{", false), "BraceLeftLit".into());
+    ty_rename_table.insert_rename(TypeIdent::new("}", false), "BraceRightLit".into());
+
+    let invalid_names = nodes
+        .iter()
+        .filter_map(|node| {
+            let ident: Result<syn::Ident, _> =
+                syn::parse_str(ty_rename_table.rename(&node.ident).as_ref());
+            if ident.is_err() {
+                Some((node.ident.ty.as_str(), node.ident.named))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if invalid_names.len() > 0 {
+        invalid_names
+            .into_iter()
+            .for_each(|(name, named)| println!("(name: '{}', named: {})", name, named));
+        panic!("Invalid names need to be renamed");
+    }
 
     let mut declarations: HashMap<TyName, TyDefBare> = HashMap::with_capacity(nodes.len());
 
     const DEBUG: bool = false;
 
-    build_types_with_defer(&mut declarations, nodes, |declarations, node| {
-        let ty_name = ty_rename_table.rename(&node.ty);
+    for node in nodes.iter() {
+        let ty_name = ty_rename_table.rename(&node.ident).to_string();
         if DEBUG {
-            println!("// Processing '{ty_name}' '{}'", node.ty);
+            println!("// Processing '{ty_name}' '{}'", node.ident.ty);
         }
 
         let child_ty = node
             .children
             .as_ref()
             .map(|children| {
-                build_field_type(declarations, &mut ty_rename_table, children, || {
+                build_field_type(&mut declarations, &mut ty_rename_table, children, || {
                     TyName::new(format!("{}Child", ty_name))
                 })
             })
@@ -416,31 +478,14 @@ where
             });
 
         if node.subtypes.len() > 0 {
-            assert_eq!(node.fields.len(), 0);
-            let mut variants = BTreeMap::new();
-
-            for subtype in &node.subtypes {
-                let sub_ty_name = TyName::new(ty_rename_table.rename(&subtype.ty));
-                if subtype.named {
-                    let variant_ty_const = TyConstuctorIncomplete::new_simple(sub_ty_name.clone());
-                    let res =
-                        variants.insert(sub_ty_name, Container::Tuple(vec![variant_ty_const]));
-                    assert!(res.is_none());
-                } else {
-                    let res = variants.insert(sub_ty_name, Container::Tuple(vec![]));
-                    assert!(res.is_none());
-                }
-            }
-
-            return Ok((
-                Enum {
-                    name: TyName::new(ty_name),
-                    variants,
-                }
-                .into(),
-                vec![],
-                vec![], // TODO: Add attr
-            ));
+            let ty_def = build_variant_type(
+                &mut ty_rename_table,
+                TyName::new(ty_name.to_string()),
+                &node.subtypes,
+            );
+            let res = declarations.insert(ty_def.0.name(), ty_def);
+            assert!(res.is_none());
+            continue;
         }
 
         let fields_ty: TyConstuctorIncomplete = if node.fields.len() > 0 {
@@ -448,12 +493,13 @@ where
                 .fields
                 .iter()
                 .map(|(field_name, field)| {
-                    build_field_type(declarations, &mut ty_rename_table, field, || {
+                    build_field_type(&mut declarations, &mut ty_rename_table, field, || {
                         TyName::new(format!("{}_{}", ty_name, field_name))
                     })
                 })
                 .collect();
 
+            // TODO: Implement field access
             let field_ty_name = format!("{ty_name}Fields");
             // println!("impl<'a> {}<'a> {{", ty_name);
             for (i, field) in fields.iter().enumerate() {
@@ -492,7 +538,7 @@ where
         let generic_node_ty =
             TyConstuctor::new_simple(TyName::new("GenericNode".into()), vec!["a".into()]).into();
 
-        let node_id = lang.id_for_node_kind(&node.ty, true);
+        let node_id = lang.id_for_node_kind(&node.ident.ty, true);
         let generic_node_parts = Impl::new([
             "impl".into(),
             ImplInstruction::DeclareLifetimes,
@@ -503,8 +549,10 @@ where
             " { const NODE_ID: u16 = ".into(),
             format!("{node_id}").into(),
             "; const NODE_KIND: &'static str = \"".into(),
-            format!("{}", node.ty.escape_default()).into(),
-            "\"; type Fields = ".into(),
+            format!("{}", node.ident.ty.escape_default()).into(),
+            "\"; const NAMED: bool = ".into(),
+            format!("{}", node.ident.named).into(),
+            "; type Fields = ".into(),
             ImplInstruction::TyConstructor(fields_ty),
             "; type Child = ".into(),
             ImplInstruction::TyConstructor(child_ty),
@@ -535,16 +583,19 @@ where
 
         let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
 
-        Ok((
+        let ty_def: TyDefBare = (
             Struct {
-                name: TyName::new(ty_name),
+                name: TyName::new(ty_name.to_string()),
                 contents: Container::Tuple(vec![node_ty.clone().into()]),
             }
             .into(),
             vec![generic_node_parts, deserialize_node_parts],
             attr,
-        ))
-    });
+        );
+        let res = declarations.insert(ty_def.0.name(), ty_def);
+        assert!(res.is_none());
+        continue;
+    }
 
     let mut declarations_incomplete: BTreeMap<TyName, TyDefBare> =
         declarations.into_iter().collect();
@@ -665,6 +716,7 @@ where
         assert!(res.is_none());
     }
 
+    println!("{}", prelude);
     for (ty_name, ty_def) in declarations_completed {
         println!("/// {}", ty_name);
         println!("{}", ty_def);
