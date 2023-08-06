@@ -421,12 +421,26 @@ fn main() {
                             TyName::new(format!("{}_{}", ty_name, field_name)) // TODO: Change rename
                         });
 
+                    let field_name_upper = field_name.to_uppercase();
+                    let const_ident_field_name = format!("FIELD_NAME_{field_name_upper}");
+                    let const_ident_field_id = format!("FIELD_ID_{field_name_upper}");
+                    let field_id = lang.field_id_for_name(field_name).unwrap();
                     [
-                        "fn field_".into(),
+                        "pub const ".into(),
+                        const_ident_field_name.into(),
+                        ": &str = \"".into(),
                         field_name.clone().into(),
-                        "(self) -> ".into(),
+                        "\"; pub const ".into(),
+                        const_ident_field_id.clone().into(),
+                        ": u16 = ".into(),
+                        format!("{field_id}").into(),
+                        "; pub fn ".into(),
+                        field_name.clone().into(),
+                        "_field(self) -> Result<".into(),
                         ImplInstruction::TyConstructor(field_ty),
-                        " { todo!() } ".into(), // TODO: Added implementation
+                        ", DeserializeError> { DeserializeNode::deserialize_at_root(&mut self.0.walk(), DeserializeMode::Field(Self::".into(),
+                        const_ident_field_id.into(),
+                        ")) }".into(),
                     ]
                 }))
                 .chain([" }".into()])
