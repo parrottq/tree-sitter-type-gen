@@ -120,7 +120,7 @@ fn build_variant_type<'a>(
 
     let deserialize_node_parts = Impl::new({
         let deserialize_node_ty =
-            TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), vec!["a".into()])
+            TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), Cow::Borrowed(&['a']))
                 .into();
 
         let front_parts = [
@@ -178,8 +178,8 @@ fn build_field_type<'a>(
     field: &'a Field,
     variant_type_name_fun: impl FnOnce() -> TyName,
 ) -> TyConstuctorIncomplete {
-    let (ty_name, lifetime) = match field.types.as_slice() {
-        [] => (TyName::new("()".to_string()), Some(vec![])),
+    let (ty_name, lifetime): (_, Option<Cow<'static, [char]>>) = match field.types.as_slice() {
+        [] => (TyName::new("()".to_string()), Some(Cow::Borrowed(&[]))),
         [single_type] => (
             TyName::new(ty_rename_table.rename(single_type).to_string()),
             None,
@@ -197,12 +197,14 @@ fn build_field_type<'a>(
 
     if field.multiple {
         // TODO: If multiple and required then at least one item must be inserted into the list. Create data type that verifies this?
-        TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), lifetime)
+        TyConstuctorIncomplete::new_wrapped(ty_name, ("Vec<", ">"), lifetime)
     } else {
         if field.required {
-            TyConstuctorIncomplete::new(("".into(), ty_name, "".into()), lifetime)
+            let mut ty = TyConstuctorIncomplete::new_simple(ty_name);
+            ty.lifetime_param = lifetime;
+            ty
         } else {
-            TyConstuctorIncomplete::new(("Option<".into(), ty_name, ">".into()), lifetime)
+            TyConstuctorIncomplete::new_wrapped(ty_name, ("Option<", ">"), lifetime)
         }
     }
 }
@@ -415,7 +417,7 @@ fn main() {
                 TyName::new(format!("{}Child", ty_name))
             })
         } else {
-            TyConstuctor::new_simple(TyName::new("()".to_owned()), vec![]).into()
+            TyConstuctor::new_simple(TyName::new("()".to_owned()), Cow::Borrowed(&[])).into()
         };
 
         if node.subtypes.len() > 0 {
@@ -476,10 +478,10 @@ fn main() {
         }
 
         let node_ty: TyConstuctorIncomplete =
-            TyConstuctor::new_simple(TyName::new("Node".into()), vec!["a".into()]).into();
+            TyConstuctor::new_simple(TyName::new("Node".into()), Cow::Borrowed(&['a'])).into();
 
         let generic_node_ty =
-            TyConstuctor::new_simple(TyName::new("GenericNode".into()), vec!["a".into()]).into();
+            TyConstuctor::new_simple(TyName::new("GenericNode".into()), Cow::Borrowed(&['a'])).into();
 
         let node_ids = kind_id_lookup.get(&node.ident).unwrap_or_else(|| {
             panic!(
@@ -515,7 +517,7 @@ fn main() {
         ].to_vec());
 
         let deserialize_node_ty =
-            TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), vec!["a".into()])
+            TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), Cow::Borrowed(&['a']))
                 .into();
 
         let deserialize_node_parts = Impl::new([

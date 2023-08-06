@@ -4,31 +4,31 @@ use super::IntoCompleted;
 
 #[derive(Debug, Clone)]
 pub struct TyConstuctor {
-    parts: (Cow<'static, str>, TyName, Cow<'static, str>),
-    pub lifetime_param: Vec<String>,
+    ty_name: TyName,
+    pub lifetime_param: Cow<'static, [char]>,
+    parts: Cow<'static, [&'static str]>,
+    ty_pos: u8,
+    lifetime_pos: u8,
+    inline_lifetime: bool,
 }
 
 impl TyConstuctor {
-    pub fn new_simple(name: TyName, lifetime_param: Vec<String>) -> Self {
+    pub fn new_simple(ty_name: TyName, lifetime_param: Cow<'static, [char]>) -> Self {
         Self {
-            parts: ("".into(), name, "".into()),
             lifetime_param,
-        }
-    }
-
-    pub fn new(
-        parts: (Cow<'static, str>, TyName, Cow<'static, str>),
-        lifetime_param: Vec<String>,
-    ) -> Self {
-        Self {
-            parts,
-            lifetime_param,
+            parts: Cow::Borrowed(&[]),
+            ty_name,
+            ty_pos: 0,
+            lifetime_pos: 0,
+            inline_lifetime: false,
         }
     }
 
     pub fn fmt_lifetime(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.lifetime_param.is_empty() {
-            write!(f, "<")?;
+            if !self.inline_lifetime {
+                write!(f, "<")?;
+            }
             for (i, lifetime) in self.lifetime_param.iter().enumerate() {
                 write!(
                     f,
@@ -40,7 +40,9 @@ impl TyConstuctor {
                     }
                 )?;
             }
-            write!(f, ">")?;
+            if !self.inline_lifetime {
+                write!(f, ">")?;
+            }
         }
         Ok(())
     }
@@ -48,40 +50,62 @@ impl TyConstuctor {
 
 impl fmt::Display for TyConstuctor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.parts.0)?;
-        write!(f, "{}", self.parts.1)?;
-        self.fmt_lifetime(f)?;
-        write!(f, "{}", self.parts.2)?;
+        for i in 0.. {
+            if i == self.ty_pos {
+                write!(f, "{}", self.ty_name)?;
+            }
+            if i == self.lifetime_pos {
+                self.fmt_lifetime(f)?;
+            }
+            if let Some(part) = self.parts.get(i as usize) {
+                write!(f, "{}", part)?;
+            } else {
+                break;
+            }
+        }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TyConstuctorIncomplete {
-    parts: (Cow<'static, str>, TyName, Cow<'static, str>),
-    pub lifetime_param: Option<Vec<String>>,
+    ty_name: TyName,
+    pub lifetime_param: Option<Cow<'static, [char]>>,
+    parts: Cow<'static, [&'static str]>,
+    ty_pos: u8,
+    lifetime_pos: u8,
+    inline_lifetime: bool,
 }
 
 impl TyConstuctorIncomplete {
-    pub fn new_simple(name: TyName) -> Self {
+    pub fn new_simple(ty_name: TyName) -> Self {
         Self {
-            parts: ("".into(), name, "".into()),
+            parts: Cow::Borrowed(&[]),
             lifetime_param: None,
+            ty_name,
+            ty_pos: 0,
+            lifetime_pos: 0,
+            inline_lifetime: false,
         }
     }
 
-    pub fn new(
-        parts: (Cow<'static, str>, TyName, Cow<'static, str>),
-        lifetime_param: Option<Vec<String>>,
+    pub fn new_wrapped(
+        ty_name: TyName,
+        parts: (&'static str, &'static str),
+        lifetime_param: Option<Cow<'static, [char]>>,
     ) -> Self {
         Self {
-            parts,
+            parts: Cow::Owned(vec![parts.0, parts.1]),
             lifetime_param,
+            ty_name,
+            ty_pos: 1,
+            lifetime_pos: 1,
+            inline_lifetime: false,
         }
     }
 
     pub fn primary_type_name(&self) -> &TyName {
-        &self.parts.1
+        &self.ty_name
     }
 }
 
@@ -90,10 +114,14 @@ impl IntoCompleted for TyConstuctorIncomplete {
 
     fn into_completed(&mut self) -> Result<Self::Result, &mut TyConstuctorIncomplete> {
         if let Some(lifetime_param) = self.lifetime_param.as_ref() {
-            Ok(TyConstuctor::new(
-                self.parts.clone(),
-                lifetime_param.clone(),
-            ))
+            Ok(TyConstuctor {
+                ty_name: self.ty_name.clone(),
+                lifetime_param: lifetime_param.clone(),
+                parts: self.parts.clone(),
+                ty_pos: self.ty_pos,
+                lifetime_pos: self.lifetime_pos,
+                inline_lifetime: self.inline_lifetime,
+            })
         } else {
             Err(self)
         }
@@ -103,8 +131,12 @@ impl IntoCompleted for TyConstuctorIncomplete {
 impl From<TyConstuctor> for TyConstuctorIncomplete {
     fn from(value: TyConstuctor) -> Self {
         Self {
-            parts: value.parts,
             lifetime_param: Some(value.lifetime_param),
+            parts: value.parts,
+            ty_pos: value.ty_pos,
+            lifetime_pos: value.lifetime_pos,
+            ty_name: value.ty_name,
+            inline_lifetime: value.inline_lifetime,
         }
     }
 }

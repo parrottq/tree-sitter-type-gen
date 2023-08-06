@@ -19,26 +19,25 @@ impl<T> Enum<T> {
 
 impl Enum<TyConstuctor> {
     pub fn ty_constructor(&self) -> TyConstuctor {
-        let mut params = BTreeSet::new();
+        let mut params = BTreeSet::new(); // Dedup and sorted
         for variant in self.variants.values() {
             match variant {
                 Container::Tuple(fields) => {
                     for ty_const in fields {
-                        params.extend(ty_const.lifetime_param.clone())
+                        params.extend(ty_const.lifetime_param.as_ref())
                     }
                 }
                 Container::Named(fields) => {
                     for ty_const in fields.values() {
-                        params.extend(ty_const.lifetime_param.clone())
+                        params.extend(ty_const.lifetime_param.as_ref())
                     }
                 }
             }
         }
 
-        let mut params = params.into_iter().collect::<Vec<_>>();
-        params.sort();
+        let params = params.into_iter().collect::<Vec<char>>();
 
-        TyConstuctor::new_simple(self.name(), params)
+        TyConstuctor::new_simple(self.name(), params.into())
     }
 }
 

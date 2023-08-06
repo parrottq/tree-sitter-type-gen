@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashSet, fmt};
+use std::{borrow::Cow, collections::BTreeSet, fmt};
 
 use super::{IntoCompleted, TyConstuctor, TyConstuctorIncomplete};
 
@@ -89,7 +89,7 @@ impl<'a> fmt::Display for ImplDisplay<'a> {
                 ImplInstruction::TyConstructor(ty) => write!(f, "{}", ty)?,
                 ImplInstruction::DeclareLifetimes => {
                     let active_lifetimes = active_lifetime_cache.get_or_insert_with(|| {
-                        let mut lifetimes = HashSet::new();
+                        let mut lifetimes: BTreeSet<char> = BTreeSet::new(); // Dedup and sorted
                         lifetimes.extend(self.self_ty.lifetime_param.iter());
 
                         for part in self.imp.parts.iter() {
@@ -101,9 +101,7 @@ impl<'a> fmt::Display for ImplDisplay<'a> {
                             }
                         }
 
-                        let mut lifetimes = lifetimes.into_iter().collect::<Vec<_>>();
-                        lifetimes.sort();
-                        lifetimes
+                        lifetimes.into_iter().collect::<Vec<_>>()
                     });
 
                     if !active_lifetimes.is_empty() {
