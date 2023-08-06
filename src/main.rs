@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
     fmt::Write,
 };
 
@@ -221,7 +221,7 @@ fn main() {
         TypeIdent::new("block_comment", true),
     ]
     .into_iter()
-    .collect::<HashSet<_>>();
+    .collect::<BTreeSet<_>>();
 
     // Add extras to all named nodes
     nodes.iter_mut().for_each(|n| {
