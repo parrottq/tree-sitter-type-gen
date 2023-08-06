@@ -137,7 +137,9 @@ where
 fn generic_deserialize_at_root<'a, T>(
     tree: &mut TreeCursor<'a>,
     mode: DeserializeMode,
-    result_on_empty: impl FnOnce() -> Result<T, DeserializeError>,
+    // Stop monomophizing when all the usages can be function pointers
+    // result_on_empty: impl FnOnce() -> Result<T, DeserializeError>,
+    result_on_empty: fn() -> Result<T, DeserializeError>,
 ) -> Result<T, DeserializeError>
 where
     T: DeserializeNode<'a>,
