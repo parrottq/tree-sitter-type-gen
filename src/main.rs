@@ -168,7 +168,7 @@ fn build_variant_type<'a>(
         }
         .into(),
         vec![deserialize_node_parts],
-        vec![], // TODO: Add attr
+        vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"],
     )
 }
 
