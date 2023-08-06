@@ -196,6 +196,7 @@ fn build_field_type<'a>(
     };
 
     if field.multiple {
+        // TODO: If multiple and required then at least one item must be inserted into the list. Create data type that verifies this?
         TyConstuctorIncomplete::new(("Vec<".into(), ty_name, ">".into()), lifetime)
     } else {
         if field.required {
@@ -381,17 +382,41 @@ fn main() {
             println!("// Processing '{ty_name}' '{}'", node.ident.ty);
         }
 
-        let child_ty = node
+        let children_fields = node
             .children
-            .as_ref()
-            .map(|children| {
-                build_field_type(&mut declarations, &mut ty_rename_table, children, || {
-                    TyName::new(format!("{}Child", ty_name))
-                })
+            .iter()
+            .chain(node.fields.iter().map(|x| x.1))
+            .collect::<Vec<_>>();
+
+        let child_field: Option<Field> = match children_fields.as_slice() {
+            [] => None,
+            [field] => Some((*field).clone()),
+            slice => {
+                let children_bounds = slice
+                    .into_iter()
+                    .map(|x| x.bounds())
+                    .reduce(|r, l| (r.0 + l.0, r.1 + l.1))
+                    .unwrap();
+                let children_types = slice
+                    .into_iter()
+                    .map(|field| field.types.as_slice().into_iter())
+                    .flatten()
+                    .collect::<BTreeSet<_>>(); // Dedup types
+                Some(Field::from_bounds(
+                    children_bounds,
+                    children_types.into_iter().cloned().collect(),
+                ))
+            }
+        };
+
+        // TODO: Create deserializer for just positional children
+        let child_ty = if let Some(children) = &child_field {
+            build_field_type(&mut declarations, &mut ty_rename_table, children, || {
+                TyName::new(format!("{}Child", ty_name))
             })
-            .unwrap_or_else(|| {
-                TyConstuctor::new_simple(TyName::new("()".to_owned()), vec![]).into()
-            });
+        } else {
+            TyConstuctor::new_simple(TyName::new("()".to_owned()), vec![]).into()
+        };
 
         if node.subtypes.len() > 0 {
             let ty_def = build_variant_type(
@@ -503,10 +528,12 @@ fn main() {
             " { fn deserialize_at_root(tree: &mut TreeCursor<'a>, mode: DeserializeMode) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree, mode) } fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError> { default_deserialize_at_current(iter) } }".into()
         ].to_vec());
 
-        let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
-
+        // TODO: Implement literal marker trait
+        // TODO: Implement GenericNode downcast (and specialized literal downcast)
+        // TODO: Fix children_all (literals don't work)
         impls.extend([generic_node_parts, deserialize_node_parts]);
 
+        let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
         let ty_def: TyDefBare = (
             Struct {
                 name: TyName::new(ty_name.to_string()),
