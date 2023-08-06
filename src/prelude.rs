@@ -2,6 +2,7 @@ pub const PRELUDE: &str = r#"
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    iter::Peekable,
 };
 use tree_sitter::{Node, TreeCursor};
 
@@ -23,8 +24,25 @@ where
     where
         Self: Sized;
 
-    fn children(&self) -> Result<Self::Child, DeserializeError> {
-        Self::Child::deserialize_at_root(&mut self.inner_node().walk())
+    fn all_children(&self) -> Result<Self::Child, DeserializeError> {
+        Self::Child::deserialize_at_root(
+            &mut self.inner_node().walk(),
+            DeserializeMode::AllChildren,
+        )
+    }
+
+    fn named_children(&self) -> Result<Self::Child, DeserializeError> {
+        Self::Child::deserialize_at_root(
+            &mut self.inner_node().walk(),
+            DeserializeMode::NamedChildren,
+        )
+    }
+
+    fn field_children(&self, field_id: u16) -> Result<Self::Child, DeserializeError> {
+        Self::Child::deserialize_at_root(
+            &mut self.inner_node().walk(),
+            DeserializeMode::Field(field_id),
+        )
     }
 }
 
@@ -70,35 +88,95 @@ pub enum DeserializeError {
     WrongType
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeserializeMode {
+    AllChildren,
+    NamedChildren,
+    Field(u16)
+}
+
+enum DeserializeIter<'a, A, B, C>
+where
+    A: Iterator<Item = Node<'a>>,
+    B: Iterator<Item = Node<'a>>,
+    C: Iterator<Item = Node<'a>>,
+{
+    A(A),
+    B(B),
+    C(C),
+}
+
+impl<'a, A, B, C> Iterator for DeserializeIter<'a, A, B, C>
+where
+    A: Iterator<Item = Node<'a>>,
+    B: Iterator<Item = Node<'a>>,
+    C: Iterator<Item = Node<'a>>,
+{
+    type Item = Node<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            DeserializeIter::A(e) => e.next(),
+            DeserializeIter::B(e) => e.next(),
+            DeserializeIter::C(e) => e.next(),
+        }
+    }
+}
+
 pub trait DeserializeNode<'a>
 where
     Self: Sized,
 {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError>;
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError>;
+    fn deserialize_at_root(
+        tree: &mut TreeCursor<'a>,
+        mode: DeserializeMode,
+    ) -> Result<Self, DeserializeError>;
+    fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError>;
 }
 
-fn default_deserialize_at_root<'a, T>(tree: &mut TreeCursor<'a>) -> Result<T, DeserializeError>
+fn generic_deserialize_at_root<'a, T>(
+    tree: &mut TreeCursor<'a>,
+    mode: DeserializeMode,
+    result_on_empty: impl FnOnce() -> Result<T, DeserializeError>,
+) -> Result<T, DeserializeError>
 where
-    T: DeserializeNode<'a>
+    T: DeserializeNode<'a>,
 {
     if DEBUG {
         let root_default_name = core::any::type_name::<T>();
         dbg!(root_default_name);
     }
-    if tree.goto_first_child() {
-        let res = T::deserialize_at_current(tree);
-        let has_sibling = tree.goto_next_sibling();
-        debug_assert!(!has_sibling);
-        let has_parent = tree.goto_parent();
-        debug_assert!(has_parent);
+
+    let iter = match mode {
+        DeserializeMode::AllChildren => DeserializeIter::A(tree.node().children(tree)),
+        DeserializeMode::NamedChildren => DeserializeIter::B(tree.node().named_children(tree)),
+        DeserializeMode::Field(field_id) => {
+            DeserializeIter::C(tree.node().children_by_field_id(field_id, tree))
+        }
+    };
+
+    let mut iter = iter.peekable();
+
+    if iter.peek().is_some() {
+        let res = T::deserialize_at_current(&mut iter);
+        debug_assert!(iter.next().is_none(), "Other node on the tree");
         Ok(res?)
     } else {
-        Err(DeserializeError::NoChild)
+        result_on_empty()
     }
 }
 
-fn default_deserialize_at_current<'a, T>(tree: &mut TreeCursor<'a>) -> Result<T, DeserializeError>
+fn default_deserialize_at_root<'a, T>(
+    tree: &mut TreeCursor<'a>,
+    mode: DeserializeMode,
+) -> Result<T, DeserializeError>
+where
+    T: DeserializeNode<'a>,
+{
+    generic_deserialize_at_root(tree, mode, || Err(DeserializeError::NoChild))
+}
+
+fn default_deserialize_at_current<'a, T>(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<T, DeserializeError>
 where
     T: DeserializeNode<'a> + GenericNode<'a>,
 {
@@ -106,19 +184,23 @@ where
         let curr_default_name = core::any::type_name::<T>();
         dbg!(curr_default_name);
     }
-    T::downcast(tree.node()).map_err(|_| DeserializeError::WrongType)
+    T::downcast(*iter.peek().ok_or(DeserializeError::NoChild)?).map_err(|_| DeserializeError::WrongType)
 }
 
-fn variants_deserialize_at_current<'a, const N: usize, T>(
-    tree: &mut TreeCursor<'a>,
-    variant_funs: [fn(&mut TreeCursor<'a>) -> Result<T, DeserializeError>; N]
-) -> Result<T, DeserializeError> {
+fn variants_deserialize_at_current<'a, const N: usize, T, I>(
+    iter: &mut Peekable<I>,
+    variant_funs: [fn(&mut Peekable<I>) -> Result<T, DeserializeError>; N],
+) -> Result<T, DeserializeError>
+where
+    I: Iterator<Item = Node<'a>>,
+{
     if DEBUG {
         let curr_variant_name = core::any::type_name::<T>();
         dbg!(curr_variant_name);
     }
+
     for variant_fun in variant_funs {
-        match variant_fun(tree) {
+        match variant_fun(iter) {
             Ok(node) => return Ok(node),
             Err(DeserializeError::WrongType) => continue,
             Err(error) => return Err(error),
@@ -132,34 +214,24 @@ impl<'a, T> DeserializeNode<'a> for Option<T>
 where
     T: DeserializeNode<'a>,
 {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
-        if DEBUG {
-            let root_opt_name = core::any::type_name::<Self>();
-            dbg!(root_opt_name);
-        }
-        if tree.goto_first_child() {
-            let res = Self::deserialize_at_current(tree);
-            let has_sibling = tree.goto_next_sibling();
-            debug_assert!(!has_sibling);
-            let has_parent = tree.goto_parent();
-            debug_assert!(has_parent);
-            Ok(res?)
-        } else {
-            Err(DeserializeError::NoChild) // TODO: Reuse this function with default impl?
-        }
+    fn deserialize_at_root(
+        tree: &mut TreeCursor<'a>,
+        mode: DeserializeMode,
+    ) -> Result<Self, DeserializeError> {
+        generic_deserialize_at_root(tree, mode, || Ok(None))
     }
 
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+    fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError> {
         if DEBUG {
             let curr_opt_name = core::any::type_name::<Self>();
             dbg!(curr_opt_name);
         }
-        Ok(Some(T::deserialize_at_current(tree)?))
+        Ok(Some(T::deserialize_at_current(iter)?))
     }
 }
 
 impl<'a> DeserializeNode<'a> for () {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>, mode: DeserializeMode) -> Result<Self, DeserializeError> {
         if DEBUG {
             let root_unit_name = core::any::type_name::<Self>();
             dbg!(root_unit_name);
@@ -169,7 +241,7 @@ impl<'a> DeserializeNode<'a> for () {
         Ok(())
     }
 
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+    fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError> {
         if DEBUG {
             let curr_unit_name = core::any::type_name::<Self>();
             dbg!(curr_unit_name);
@@ -183,31 +255,22 @@ impl<'a, T> DeserializeNode<'a> for Vec<T>
 where
     T: DeserializeNode<'a>,
 {
-    fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
-        if DEBUG {
-            let root_vec_name = core::any::type_name::<Self>();
-            dbg!(root_vec_name);
-        }
-        if tree.goto_first_child() {
-            let res = Self::deserialize_at_current(tree);
-            let has_parent = tree.goto_parent();
-            debug_assert!(has_parent);
-            Ok(res?)
-        } else {
-            Ok(vec![])
-        }
+    fn deserialize_at_root(tree: &mut TreeCursor<'a>, mode: DeserializeMode) -> Result<Self, DeserializeError> {
+        generic_deserialize_at_root(tree, mode, || Ok(vec![]))
     }
 
-    fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> {
+    fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError> {
         if DEBUG {
             let curr_vec_name = core::any::type_name::<Self>();
             dbg!(curr_vec_name);
         }
         let mut nodes = Vec::new();
         loop {
-            nodes.push(T::deserialize_at_current(tree)?);
+            nodes.push(T::deserialize_at_current(iter)?);
 
-            if !tree.goto_next_sibling() {
+            iter.next(); // Move to next node
+
+            if iter.peek().is_none() {
                 break Ok(nodes);
             }
         }

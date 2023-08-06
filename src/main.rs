@@ -130,7 +130,7 @@ fn build_variant_type<'a>(
                     ImplInstruction::TyConstructor(deserialize_node_ty),
                     " for ".into(),
                     ImplInstruction::SelfType,
-                    " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { let variant_funs: [fn(&mut TreeCursor<'a>) -> Result<Self, DeserializeError>; ".into(),
+                    " { fn deserialize_at_root(tree: &mut TreeCursor<'a>, mode: DeserializeMode) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree, mode) } fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError> { let variant_funs: [for<'b> fn(&'b mut Peekable<_>) -> Result<Self, DeserializeError>; ".into(),
                     format!("{}", subtypes.len()).into(),
                     "] = [ ".into()
                 ];
@@ -141,18 +141,18 @@ fn build_variant_type<'a>(
                 let variant_name = ty_rename_table.rename(variant_name).to_string();
 
                 [
-                    "|tree| Ok(".into(),
+                    "|iter| Ok(".into(),
                     ty_name.as_ref().to_owned().into(),
                     "::".into(),
                     variant_name.clone().into(),
                     "(".into(),
                     variant_name.into(),
-                    "::deserialize_at_current(tree)?)), ".into(),
+                    "::deserialize_at_current(iter)?)), ".into(),
                 ]
             })
             .flatten();
 
-        let back_part = ["]; variants_deserialize_at_current(tree, variant_funs) } }".into()];
+        let back_part = ["]; variants_deserialize_at_current(iter, variant_funs) } }".into()];
 
         front_parts
             .into_iter()
@@ -404,25 +404,36 @@ fn main() {
             continue;
         }
 
+        let mut impls = vec![];
         if node.fields.len() > 0 {
-            let fields: Vec<_> = node
-                .fields
-                .iter()
-                .map(|(field_name, field)| {
-                    build_field_type(&mut declarations, &mut ty_rename_table, field, || {
-                        TyName::new(format!("{}_{}", ty_name, field_name))
-                    })
-                })
-                .collect();
+            let impl_parts = Impl::new(
+                [
+                    "impl".into(),
+                    ImplInstruction::DeclareLifetimes,
+                    " ".into(),
+                    ImplInstruction::SelfType,
+                    " { ".into(),
+                ]
+                .into_iter()
+                .chain(node.fields.iter().flat_map(|(field_name, field)| {
+                    let field_ty =
+                        build_field_type(&mut declarations, &mut ty_rename_table, field, || {
+                            TyName::new(format!("{}_{}", ty_name, field_name)) // TODO: Change rename
+                        });
 
-            // TODO: Implement field access
-            for (i, field) in fields.iter().enumerate() {
-                // println!(
-                //     "    pub fn fields(&self) -> {} {{ {} }}",
-                //     field_ty_name,
-                //     field.cast_ty(&format!("self.{i}"))
-                // );
-            }
+                    [
+                        "fn field_".into(),
+                        field_name.clone().into(),
+                        "(self) -> ".into(),
+                        ImplInstruction::TyConstructor(field_ty),
+                        " { todo!() } ".into(), // TODO: Added implementation
+                    ]
+                }))
+                .chain([" }".into()])
+                .collect(),
+            );
+
+            impls.push(impl_parts);
         }
 
         let node_ty: TyConstuctorIncomplete =
@@ -475,10 +486,12 @@ fn main() {
             ImplInstruction::TyConstructor(deserialize_node_ty),
             " for ".into(),
             ImplInstruction::SelfType,
-            " { fn deserialize_at_root(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree) } fn deserialize_at_current(tree: &mut TreeCursor<'a>) -> Result<Self, DeserializeError> { default_deserialize_at_current(tree) } }".into()
+            " { fn deserialize_at_root(tree: &mut TreeCursor<'a>, mode: DeserializeMode) -> Result<Self, DeserializeError> { default_deserialize_at_root(tree, mode) } fn deserialize_at_current(iter: &mut Peekable<impl Iterator<Item=Node<'a>>>) -> Result<Self, DeserializeError> { default_deserialize_at_current(iter) } }".into()
         ].to_vec());
 
         let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
+
+        impls.extend([generic_node_parts, deserialize_node_parts]);
 
         let ty_def: TyDefBare = (
             Struct {
@@ -486,7 +499,7 @@ fn main() {
                 contents: Container::Tuple(vec![node_ty.clone().into()]),
             }
             .into(),
-            vec![generic_node_parts, deserialize_node_parts],
+            impls,
             attr,
         );
         let res = declarations.insert(ty_def.0.name(), ty_def);
