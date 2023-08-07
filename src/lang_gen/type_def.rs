@@ -1,10 +1,10 @@
-use std::fmt;
+use std::{fmt, borrow::Cow};
 
 use super::{ContainerDef, Impl, IntoCompleted, TyConstuctor, TyConstuctorIncomplete, TyName};
 
 #[derive(Debug, Clone)]
 pub struct TypeDef<T> {
-    attr: Vec<&'static str>,
+    attr: Vec<Cow<'static, str>>,
     container: ContainerDef<T>,
     impls: Vec<Impl<T>>,
 }
@@ -26,7 +26,7 @@ impl<T> TypeDef<T> {
         self.impls.push(imp);
     }
 
-    pub fn push_attr(&mut self, attr: &'static str) {
+    pub fn push_attr(&mut self, attr: Cow<'static, str>) {
         self.attr.push(attr);
     }
 }

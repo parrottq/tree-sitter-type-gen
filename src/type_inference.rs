@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::lang_gen::{
@@ -12,7 +13,7 @@ pub fn complete_type_def_generics(
     (
         ContainerDef<TyConstuctor>,
         Vec<Impl<TyConstuctorIncomplete>>,
-        Vec<&'static str>,
+        Vec<Cow<'static, str>>,
     ),
 > {
     let mut declarations_partial_completed: BTreeMap<
@@ -20,7 +21,7 @@ pub fn complete_type_def_generics(
         (
             ContainerDef<TyConstuctor>,
             Vec<Impl<TyConstuctorIncomplete>>,
-            Vec<&'static str>,
+            Vec<Cow<'static, str>>,
         ),
     > = BTreeMap::new();
     let mut checking_stack: Vec<TyName> = vec![];
@@ -101,7 +102,7 @@ pub fn complete_impl_generics(
         (
             ContainerDef<TyConstuctor>,
             Vec<Impl<TyConstuctorIncomplete>>,
-            Vec<&'static str>,
+            Vec<Cow<'static, str>>,
         ),
     >,
 ) -> BTreeMap<TyName, TypeDef<TyConstuctor>> {

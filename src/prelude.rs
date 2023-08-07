@@ -1,9 +1,11 @@
 pub const PRELUDE: &str = r#"
+#![allow(non_camel_case_types)]
 use core::iter::Peekable;
 use tree_sitter::{Node, TreeCursor};
 
 const DEBUG: bool = false;
 
+/// Marks a structure that represents a single node kind. Theses structures contain a single [Node].
 pub trait GenericNode<'a>
 where
     Self::Child: DeserializeNode<'a>,
@@ -27,6 +29,7 @@ where
     where
         Self: Sized;
 
+    /// All this nodes children (includes unnamed literals in the grammer). Unnamed literals are represented by [NodeOrAny::Any]. Typed children by [NodeOrAny::Typed].
     fn children_any(
         &self,
     ) -> Result<Self::Container<NodeOrAny<'a, Self::Child>>, DeserializeError> {
@@ -36,6 +39,7 @@ where
         )
     }
 
+    /// Return all named children of the current node.
     fn children_named(&self) -> Result<Self::Container<Self::Child>, DeserializeError> {
         Self::Container::<Self::Child>::deserialize_at_root(
             &mut self.inner_node().walk(),
@@ -43,6 +47,7 @@ where
         )
     }
 
+    /// Return children associated with a specific field.
     fn children_field(
         &self,
         field_id: u16,
@@ -54,9 +59,12 @@ where
     }
 }
 
+/// Error type when turning [Node] into a [GenericNode] fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeserializeError {
+    /// The current node has no children (when children where expected).
     NoChild,
+    /// The [Node::kind_id] of one of the [Node] was wrong.
     WrongType { unexpected_kind_id: u16 },
 }
 
@@ -95,14 +103,17 @@ where
     }
 }
 
+/// Implements runtime typechecking of all [Node] into [GenericNode] or variant types. This can also include containers containing nodes such as [Vec] or [Option].
 pub trait DeserializeNode<'a>
 where
     Self: Sized,
 {
+    /// Downcast children nodes of the current tree position into a [GenericNode], variant, or a container of the former.
     fn deserialize_at_root(
         tree: &mut TreeCursor<'a>,
         mode: DeserializeMode,
     ) -> Result<Self, DeserializeError>;
+    /// Downcast children nodes into a [GenericNode], variant, or a container of the former.
     fn deserialize_at_current(
         iter: &mut Peekable<impl Iterator<Item = Node<'a>>>,
     ) -> Result<Self, DeserializeError>;
@@ -291,12 +302,15 @@ where
     }
 }
 
+/// For when you want to deserialize with [DeserializeNode] but if typechecking a node fails you still want to store it.
 #[derive(Debug, Clone, Copy)]
 pub enum NodeOrAny<'a, T>
 where
     T: DeserializeNode<'a>,
 {
+    /// A typed node or variant
     Typed(T),
+    /// Catch all for when a node isn't [NodeOrAny::Typed]
     Any(Node<'a>),
 }
 
@@ -322,6 +336,7 @@ where
     }
 }
 
+/// A memory efficient set of [u16] that can be check against in a const context.
 #[derive(Debug, Clone, Copy)]
 pub enum IntU16Set {
     Value(u16),
@@ -330,6 +345,7 @@ pub enum IntU16Set {
 }
 
 impl IntU16Set {
+    /// Check if the set contains a [u16] value
     #[inline]
     pub const fn contains(&self, value: u16) -> bool {
         match self {
@@ -361,6 +377,7 @@ impl IntU16Set {
         }
     }
 
+    /// [Iterator] of all values in the set
     pub fn iter(&self) -> IntU16SetIter {
         IntU16SetIter(*self)
     }

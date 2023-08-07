@@ -100,7 +100,7 @@ fn make_node_id_set(ids: &[u16]) -> String {
 pub type TyDefBare = (
     ContainerDef<TyConstuctorIncomplete>,
     Vec<Impl<TyConstuctorIncomplete>>,
-    Vec<&'static str>,
+    Vec<Cow<'static, str>>,
 );
 
 fn build_variant_type<'a>(
@@ -167,7 +167,7 @@ fn build_variant_type<'a>(
         }
         .into(),
         vec![deserialize_node_parts],
-        vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"],
+        vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]".into()],
     )
 }
 
@@ -436,11 +436,12 @@ fn main() {
         };
 
         if node.subtypes.len() > 0 {
-            let ty_def = build_variant_type(
+            let mut ty_def = build_variant_type(
                 &mut ty_rename_table,
                 TyName::new(ty_name.to_string()),
                 &node.subtypes,
             );
+            ty_def.2.insert(0, format!("/// `{}` [tree_sitter::Node]{}", node.ident.ty, if node.ident.named {""} else {" (literal)"}).into());
             let res = declarations.insert(ty_def.0.name(), ty_def);
             assert!(res.is_none());
             continue;
@@ -460,7 +461,7 @@ fn main() {
                 .chain(node.fields.iter().flat_map(|(field_name, field)| {
                     let (field_ty, _) =
                         build_field_type(&mut declarations, &mut ty_rename_table, field, || {
-                            TyName::new(format!("{}_{}", ty_name, field_name)) // TODO: Change rename
+                            TyName::new(format!("{}Field_{}", ty_name, field_name)) // TODO: Change rename
                         });
 
                     let field_name_upper = field_name.to_uppercase();
@@ -558,7 +559,10 @@ fn main() {
         // TODO: Implement GenericNode downcast (and specialized literal downcast)
         impls.extend([generic_node_parts, deserialize_node_parts]);
 
-        let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];
+        let attr = vec![
+            format!("/// A typed `{}` [Node]{}", node.ident.ty, if node.ident.named {""} else {" (literal)"}).into(),
+            "#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]".into()
+        ];
         let ty_def: TyDefBare = (
             Struct {
                 name: TyName::new(ty_name.to_string()),
@@ -582,9 +586,10 @@ fn main() {
         type_inference::complete_impl_generics(declarations_partial_completed);
 
     println!("{}", prelude::PRELUDE.trim());
+    println!("\npub mod nodes {{ use super::*;");
     for (ty_name, ty_def) in declarations_completed {
-        println!("/// {}", ty_name);
         println!("{}", ty_def);
         println!();
     }
+    println!("}}");
 }
