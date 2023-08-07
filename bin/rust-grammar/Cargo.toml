@@ -1,0 +1,9 @@
+[package]
+name = "rust-grammar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tree-sitter-type-gen = { path = "../../" }
+
+tree-sitter-rust = "0.20.3"

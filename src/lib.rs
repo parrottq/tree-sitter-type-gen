@@ -5,6 +5,7 @@ use std::{
 };
 
 use convert_case::{Case, Casing};
+use tree_sitter::Language;
 
 mod lang_gen;
 mod node;
@@ -15,7 +16,8 @@ use lang_gen::{
     Container, ContainerDef, Enum, Impl, ImplInstruction, Struct, TyConstuctor,
     TyConstuctorIncomplete, TyName,
 };
-use node::{Field, Node, TypeIdent};
+use node::{Field, Node};
+pub use node::TypeIdent;
 
 #[derive(Default, Clone)]
 struct RenameTable<T>(HashMap<TypeIdent, Cow<'static, str>>, T)
@@ -97,7 +99,7 @@ fn make_node_id_set(ids: &[u16]) -> String {
 }
 
 // TODO: Roll this into TypeDef?
-pub type TyDefBare = (
+pub(crate) type TyDefBare = (
     ContainerDef<TyConstuctorIncomplete>,
     Vec<Impl<TyConstuctorIncomplete>>,
     Vec<Cow<'static, str>>,
@@ -221,19 +223,37 @@ fn build_field_type<'a>(
     }
 }
 
-pub const DEBUG: bool = false;
+pub struct GeneratorBuilder {
+    lang: Language,
+    node_types: &'static str,
+    extras: BTreeSet<TypeIdent>,
+}
 
-fn main() {
-    let lang = tree_sitter_rust::language();
+impl GeneratorBuilder {
+    pub fn new(lang: Language, node_types: &'static str) -> Self {
+        Self {
+            lang,
+            node_types,
+            extras: BTreeSet::new(),
+        }
+    }
 
-    let mut nodes = serde_json::from_str::<Vec<Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
+    pub fn add_extras(mut self, extras: impl IntoIterator<Item = TypeIdent>) -> Self {
+        self.extras.extend(extras);
+        self
+    }
 
-    let extras = vec![
-        TypeIdent::new("line_comment", true),
-        TypeIdent::new("block_comment", true),
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
+    pub fn build(self) -> String {
+        // TODO: Error handling
+        build(self)
+    }
+}
+
+pub(crate) const DEBUG: bool = false;
+
+fn build(build_opts: GeneratorBuilder) -> String {
+    let mut nodes = serde_json::from_str::<Vec<Node>>(build_opts.node_types)
+        .expect("Could not parse given 'node-types.json'");
 
     // Add extras to all named nodes
     nodes.iter_mut().for_each(|n| {
@@ -244,7 +264,7 @@ fn main() {
             .for_each(|(field_name, ident)| {
                 // I think you only need to add to fields that have multiple since otherwise the node won't be parse (?)
                 if ident.multiple {
-                    let mut missing_extras = extras.clone();
+                    let mut missing_extras = build_opts.extras.clone();
                     ident.types.iter().for_each(|extra| {
                         missing_extras.remove(extra);
                     });
@@ -266,12 +286,13 @@ fn main() {
     });
 
     let mut kind_id_lookup: HashMap<TypeIdent, Vec<u16>> =
-        HashMap::with_capacity(lang.node_kind_count());
-    for id in 0..lang.node_kind_count().try_into().unwrap() {
-        let kind = lang
+        HashMap::with_capacity(build_opts.lang.node_kind_count());
+    for id in 0..build_opts.lang.node_kind_count().try_into().unwrap() {
+        let kind = build_opts
+            .lang
             .node_kind_for_id(id)
             .expect("Node kind id not present within id range");
-        let is_named = lang.node_kind_is_named(id);
+        let is_named = build_opts.lang.node_kind_is_named(id);
 
         let ident = TypeIdent::new(kind, is_named);
         let res = kind_id_lookup.entry(ident).or_default();
@@ -441,7 +462,15 @@ fn main() {
                 TyName::new(ty_name.to_string()),
                 &node.subtypes,
             );
-            ty_def.2.insert(0, format!("/// `{}` [tree_sitter::Node]{}", node.ident.ty, if node.ident.named {""} else {" (literal)"}).into());
+            ty_def.2.insert(
+                0,
+                format!(
+                    "/// `{}` [tree_sitter::Node]{}",
+                    node.ident.ty,
+                    if node.ident.named { "" } else { " (literal)" }
+                )
+                .into(),
+            );
             let res = declarations.insert(ty_def.0.name(), ty_def);
             assert!(res.is_none());
             continue;
@@ -467,7 +496,7 @@ fn main() {
                     let field_name_upper = field_name.to_uppercase();
                     let const_ident_field_name = format!("FIELD_NAME_{field_name_upper}");
                     let const_ident_field_id = format!("FIELD_ID_{field_name_upper}");
-                    let field_id = lang.field_id_for_name(field_name).unwrap();
+                    let field_id = build_opts.lang.field_id_for_name(field_name).unwrap();
                     [
                         "pub const ".into(),
                         const_ident_field_name.into(),
@@ -560,8 +589,13 @@ fn main() {
         impls.extend([generic_node_parts, deserialize_node_parts]);
 
         let attr = vec![
-            format!("/// A typed `{}` [Node]{}", node.ident.ty, if node.ident.named {""} else {" (literal)"}).into(),
-            "#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]".into()
+            format!(
+                "/// A typed `{}` [Node]{}",
+                node.ident.ty,
+                if node.ident.named { "" } else { " (literal)" }
+            )
+            .into(),
+            "#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]".into(),
         ];
         let ty_def: TyDefBare = (
             Struct {
@@ -585,11 +619,13 @@ fn main() {
     let declarations_completed =
         type_inference::complete_impl_generics(declarations_partial_completed);
 
-    println!("{}", prelude::PRELUDE.trim());
-    println!("\npub mod nodes {{ use super::*;");
-    for (ty_name, ty_def) in declarations_completed {
-        println!("{}", ty_def);
-        println!();
+    let mut output = String::new();
+    output.push_str(prelude::PRELUDE.trim());
+    output.push_str("\npub mod nodes { use super::*;\n");
+
+    for (_ty_name, ty_def) in declarations_completed {
+        writeln!(output, "{}\n", ty_def).unwrap();
     }
-    println!("}}");
+    output.push_str("}\n");
+    output
 }
