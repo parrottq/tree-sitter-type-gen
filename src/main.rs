@@ -172,12 +172,19 @@ fn build_variant_type<'a>(
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContainerType {
+    Vec,
+    Option,
+    Ident,
+}
+
 fn build_field_type<'a>(
     declarations: &mut HashMap<TyName, TyDefBare>,
     ty_rename_table: &mut RenameTable<impl FnMut(&TypeIdent) -> Cow<'static, str>>,
     field: &'a Field,
     variant_type_name_fun: impl FnOnce() -> TyName,
-) -> TyConstuctorIncomplete {
+) -> (TyConstuctorIncomplete, ContainerType) {
     let (ty_name, lifetime): (_, Option<Cow<'static, [char]>>) = match field.types.as_slice() {
         [] => (TyName::new("()".to_string()), Some(Cow::Borrowed(&[]))),
         [single_type] => (
@@ -197,14 +204,20 @@ fn build_field_type<'a>(
 
     if field.multiple {
         // TODO: If multiple and required then at least one item must be inserted into the list. Create data type that verifies this?
-        TyConstuctorIncomplete::new_wrapped(ty_name, ("Vec<", ">"), lifetime)
+        (
+            TyConstuctorIncomplete::new_wrapped(ty_name, ("Vec<", ">"), lifetime),
+            ContainerType::Vec,
+        )
     } else {
         if field.required {
             let mut ty = TyConstuctorIncomplete::new_simple(ty_name);
             ty.lifetime_param = lifetime;
-            ty
+            (ty, ContainerType::Ident)
         } else {
-            TyConstuctorIncomplete::new_wrapped(ty_name, ("Option<", ">"), lifetime)
+            (
+                TyConstuctorIncomplete::new_wrapped(ty_name, ("Option<", ">"), lifetime),
+                ContainerType::Option,
+            )
         }
     }
 }
@@ -417,7 +430,10 @@ fn main() {
                 TyName::new(format!("{}Child", ty_name))
             })
         } else {
-            TyConstuctor::new_simple(TyName::new("()".to_owned()), Cow::Borrowed(&[])).into()
+            (
+                TyConstuctor::new_simple(TyName::new("()".to_owned()), Cow::Borrowed(&[])).into(),
+                ContainerType::Ident,
+            )
         };
 
         if node.subtypes.len() > 0 {
@@ -443,7 +459,7 @@ fn main() {
                 ]
                 .into_iter()
                 .chain(node.fields.iter().flat_map(|(field_name, field)| {
-                    let field_ty =
+                    let (field_ty, _) =
                         build_field_type(&mut declarations, &mut ty_rename_table, field, || {
                             TyName::new(format!("{}_{}", ty_name, field_name)) // TODO: Change rename
                         });
@@ -481,7 +497,8 @@ fn main() {
             TyConstuctor::new_simple(TyName::new("Node".into()), Cow::Borrowed(&['a'])).into();
 
         let generic_node_ty =
-            TyConstuctor::new_simple(TyName::new("GenericNode".into()), Cow::Borrowed(&['a'])).into();
+            TyConstuctor::new_simple(TyName::new("GenericNode".into()), Cow::Borrowed(&['a']))
+                .into();
 
         let node_ids = kind_id_lookup.get(&node.ident).unwrap_or_else(|| {
             panic!(
@@ -503,8 +520,16 @@ fn main() {
             format!("{}", node.ident.ty.escape_default()).into(),
             "\"; const NAMED: bool = ".into(),
             format!("{}", node.ident.named).into(),
-            "; type Child = ".into(),
-            ImplInstruction::TyConstructor(child_ty),
+            "; type Container<T> = ".into(),
+            {
+                match child_ty.1 {
+                    ContainerType::Vec => "Vec<T>",
+                    ContainerType::Option => "Option<T>",
+                    ContainerType::Ident => "T",
+                }
+            }.into(),
+            " where T: DeserializeNode<'a>; type Child = ".into(),
+            ImplInstruction::TyConstructor(child_ty.0.strip_decorators()),
             "; fn inner_node(&self) -> &".into(),
             ImplInstruction::TyConstructor(node_ty.clone()),
             " { &self.0 } fn inner_node_mut(&mut self) -> &mut ".into(),
@@ -532,7 +557,6 @@ fn main() {
 
         // TODO: Implement literal marker trait
         // TODO: Implement GenericNode downcast (and specialized literal downcast)
-        // TODO: Fix children_all (literals don't work)
         impls.extend([generic_node_parts, deserialize_node_parts]);
 
         let attr = vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]"];

@@ -7,12 +7,19 @@ const DEBUG: bool = false;
 pub trait GenericNode<'a>
 where
     Self::Child: DeserializeNode<'a>,
+    Self::Container<Self::Child>: DeserializeNode<'a>,
+    // Pretty sure this should be implied but I guess the compiler doesn't want
+    // to infer that `NodeOrAny<'a, _>: DeserializeNode<'a>` is always implemented.
+    Self::Container<NodeOrAny<'a, Self::Child>>: DeserializeNode<'a>,
 {
     const NODE_ID_SET: IntU16Set;
     const NODE_KIND: &'static str;
     const NAMED: bool;
 
     type Child;
+    type Container<T>
+    where
+        T: DeserializeNode<'a>;
 
     fn inner_node(&self) -> &Node<'a>;
     fn inner_node_mut(&mut self) -> &mut Node<'a>;
@@ -20,22 +27,27 @@ where
     where
         Self: Sized;
 
-    fn children_any(&self) -> Result<Self::Child, DeserializeError> {
-        Self::Child::deserialize_at_root(
+    fn children_any(
+        &self,
+    ) -> Result<Self::Container<NodeOrAny<'a, Self::Child>>, DeserializeError> {
+        Self::Container::<NodeOrAny<Self::Child>>::deserialize_at_root(
             &mut self.inner_node().walk(),
             DeserializeMode::AllChildren,
         )
     }
 
-    fn children_named(&self) -> Result<Self::Child, DeserializeError> {
-        Self::Child::deserialize_at_root(
+    fn children_named(&self) -> Result<Self::Container<Self::Child>, DeserializeError> {
+        Self::Container::<Self::Child>::deserialize_at_root(
             &mut self.inner_node().walk(),
             DeserializeMode::NamedChildren,
         )
     }
 
-    fn children_field(&self, field_id: u16) -> Result<Self::Child, DeserializeError> {
-        Self::Child::deserialize_at_root(
+    fn children_field(
+        &self,
+        field_id: u16,
+    ) -> Result<Vec<Self::Child>, DeserializeError> {
+        Vec::<Self::Child>::deserialize_at_root(
             &mut self.inner_node().walk(),
             DeserializeMode::Field(field_id),
         )
@@ -145,6 +157,11 @@ fn default_deserialize_at_current<'a, T>(
 ) -> Result<T, DeserializeError>
 where
     T: DeserializeNode<'a> + GenericNode<'a>,
+    // These should be implied by implementing `T: GenericNode<'a>` but whatever, gotta keep the compiler happy.
+    <T as GenericNode<'a>>::Container<<T as GenericNode<'a>>::Child>:
+        DeserializeNode<'a>,
+    <T as GenericNode<'a>>::Container<NodeOrAny<'a, <T as GenericNode<'a>>::Child>>:
+        DeserializeNode<'a>,
 {
     if DEBUG {
         let curr_default_name = core::any::type_name::<T>();
@@ -270,6 +287,37 @@ where
                 }
                 break Ok(nodes);
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NodeOrAny<'a, T>
+where
+    T: DeserializeNode<'a>,
+{
+    Typed(T),
+    Any(Node<'a>),
+}
+
+impl<'a, T> DeserializeNode<'a> for NodeOrAny<'a, T>
+where
+    T: DeserializeNode<'a>,
+{
+    fn deserialize_at_root(
+        tree: &mut TreeCursor<'a>,
+        mode: DeserializeMode,
+    ) -> Result<Self, DeserializeError> {
+        default_deserialize_at_root(tree, mode)
+    }
+
+    fn deserialize_at_current(
+        iter: &mut Peekable<impl Iterator<Item = Node<'a>>>,
+    ) -> Result<Self, DeserializeError> {
+        match T::deserialize_at_current(iter) {
+            Ok(result) => Ok(NodeOrAny::Typed(result)),
+            Err(DeserializeError::WrongType { .. }) => Ok(NodeOrAny::Any(*iter.peek().unwrap())),
+            Err(error) => Err(error),
         }
     }
 }

@@ -107,6 +107,12 @@ impl TyConstuctorIncomplete {
     pub fn primary_type_name(&self) -> &TyName {
         &self.ty_name
     }
+
+    pub fn strip_decorators(self) -> Self {
+        let mut f = Self::new_simple(self.ty_name);
+        f.lifetime_param = self.lifetime_param;
+        f
+    }
 }
 
 impl IntoCompleted for TyConstuctorIncomplete {
