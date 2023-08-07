@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write,
 };
 
@@ -10,48 +10,17 @@ use tree_sitter::Language;
 mod lang_gen;
 mod node;
 mod prelude;
+mod rename;
+pub mod symbols;
 mod type_inference;
 
 use lang_gen::{
     Container, ContainerDef, Enum, Impl, ImplInstruction, Struct, TyConstuctor,
     TyConstuctorIncomplete, TyName,
 };
-use node::{Field, Node};
 pub use node::TypeIdent;
-
-#[derive(Default, Clone)]
-struct RenameTable<T>(HashMap<TypeIdent, Cow<'static, str>>, T)
-where
-    T: FnMut(&TypeIdent) -> Cow<'static, str>;
-
-impl<T> RenameTable<T>
-where
-    T: FnMut(&TypeIdent) -> Cow<'static, str>,
-{
-    fn new(convert: T) -> Self {
-        Self(Default::default(), convert)
-    }
-
-    fn rename<'a>(&'a mut self, ty_name: &TypeIdent) -> Cow<'static, str> {
-        if let Some(e) = self.0.get(ty_name) {
-            return e.clone();
-        }
-
-        match self.0.entry(ty_name.clone()) {
-            Entry::Occupied(_) => unreachable!(),
-            Entry::Vacant(entry) => {
-                let ty_new = (self.1)(entry.key());
-                entry.insert(ty_new).clone()
-            }
-        }
-    }
-
-    fn insert_rename(&mut self, ty_src: TypeIdent, ty_dst: Cow<'static, str>) {
-        if let Some(_) = self.0.insert(ty_src, ty_dst) {
-            panic!()
-        }
-    }
-}
+use node::{Field, Node};
+use rename::{RenameTable, SubstitutionTable};
 
 fn make_node_id_set(ids: &[u16]) -> String {
     // Collecting into 'BTreeSet' sorts and removed duplicates
@@ -227,19 +196,32 @@ pub struct GeneratorBuilder {
     lang: Language,
     node_types: &'static str,
     extras: BTreeSet<TypeIdent>,
+    symbol_renamer: SubstitutionTable,
 }
 
 impl GeneratorBuilder {
     pub fn new(lang: Language, node_types: &'static str) -> Self {
+        let empty: [(Cow<'static, str>, Cow<'static, str>); 0] = [];
+        let symbol_renamer = SubstitutionTable::new(empty);
+
         Self {
             lang,
             node_types,
             extras: BTreeSet::new(),
+            symbol_renamer,
         }
     }
 
     pub fn add_extras(mut self, extras: impl IntoIterator<Item = TypeIdent>) -> Self {
         self.extras.extend(extras);
+        self
+    }
+
+    pub fn replace_symbol_substitution(
+        mut self,
+        values: impl IntoIterator<Item = (impl Into<Cow<'static, str>>, impl Into<Cow<'static, str>>)>,
+    ) -> Self {
+        self.symbol_renamer = SubstitutionTable::new(values);
         self
     }
 
@@ -322,72 +304,21 @@ fn build(build_opts: GeneratorBuilder) -> String {
 
     // assert!(flagged_count == 0, "Found overlapping type names");
 
-    // TODO: Check for overlapping names explicitly
+    // TODO: Check for overlapping names explicitly (or give a nice panic message)
     // TODO: Use more uniform symbol sanitizer
     let mut ty_rename_table = RenameTable::new(|x| match x.ty.as_ref() {
         "_" => "Base".into(),
         _ => format!(
             "{}{}",
-            x.ty.from_case(Case::Snake).to_case(Case::Pascal),
+            build_opts
+                .symbol_renamer
+                .substitute_symbols(x.ty.as_str())
+                .from_case(Case::Snake)
+                .to_case(Case::Pascal),
             if x.named { "" } else { "Lit" }
         )
         .into(),
     });
-
-    ty_rename_table.insert_rename(TypeIdent::new("!", false), "NotLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("!=", false), "NotEqualLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("self", true), "SelfTyLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("%", false), "ModulusLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("&", false), "BitwiseAndLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("&&", false), "AndLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("*", false), "MultiplyLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("+", false), "AdditionLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("-", false), "SubtractLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("/", false), "DivideLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("<", false), "LessThanLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("<<", false), "LeftShiftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("<=", false), "LessThanEqualLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("==", false), "EqualLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(">", false), "GreaterThanLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(">=", false), "GreaterThanEqualLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(">>", false), "RightShiftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("^", false), "XorLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("|", false), "BitwiseOrLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("||", false), "OrLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("%=", false), "AssignModulusLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("&=", false), "AssignBitwiseAndLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("*=", false), "AssignMultiplyLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("+=", false), "AssignAdditionLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("-=", false), "AssignSubtractLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("/=", false), "AssignDivideLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("<<=", false), "AssignLeftShiftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(">>=", false), "AssignRightShiftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("^=", false), "AssignXorLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("|=", false), "AssignOrLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("\"", false), "QuoteDoubleLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("#", false), "PoundLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("$", false), "DollarLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("'", false), "QuoteSingleLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("(", false), "ParenLeftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(")", false), "ParentRightLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(",", false), "CommaLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("->", false), "RArrowLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(".", false), "DotLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("..", false), "DotDotLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("...", false), "DotDotDotLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("..=", false), "DotDotEqLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(":", false), "ColonLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("::", false), "PathSepLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new(";", false), "SemiLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("=", false), "EqLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("=>", false), "FatArrowLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("?", false), "QuestionLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("@", false), "AtLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("[", false), "BracketLeftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("]", false), "BracketRightLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("macro_rules!", false), "MacroRuleLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("{", false), "BraceLeftLit".into());
-    ty_rename_table.insert_rename(TypeIdent::new("}", false), "BraceRightLit".into());
 
     let invalid_names = nodes
         .iter()

@@ -1,4 +1,4 @@
-use std::{fmt, borrow::Cow};
+use std::{borrow::Cow, fmt};
 
 use super::{ContainerDef, Impl, IntoCompleted, TyConstuctor, TyConstuctorIncomplete, TyName};
 
