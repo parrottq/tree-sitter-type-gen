@@ -1,9 +1,5 @@
 pub const PRELUDE: &str = r#"
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-    iter::Peekable,
-};
+use core::iter::Peekable;
 use tree_sitter::{Node, TreeCursor};
 
 const DEBUG: bool = false;
@@ -43,42 +39,6 @@ where
             &mut self.inner_node().walk(),
             DeserializeMode::Field(field_id),
         )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeTy<'a, T>(pub T, pub PhantomData<Node<'a>>)
-where
-    T: GenericNode<'a>;
-
-impl<'a, T> TryFrom<Node<'a>> for NodeTy<'a, T>
-where
-    T: GenericNode<'a>,
-{
-    type Error = Node<'a>;
-
-    fn try_from(value: Node<'a>) -> Result<Self, Self::Error> {
-        Ok(Self(T::downcast(value)?, PhantomData))
-    }
-}
-
-impl<'a, T> Deref for NodeTy<'a, T>
-where
-    T: GenericNode<'a>,
-{
-    type Target = Node<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.inner_node()
-    }
-}
-
-impl<'a, T> DerefMut for NodeTy<'a, T>
-where
-    T: GenericNode<'a>,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.inner_node_mut()
     }
 }
 
