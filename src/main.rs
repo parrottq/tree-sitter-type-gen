@@ -9,14 +9,13 @@ use convert_case::{Case, Casing};
 mod lang_gen;
 mod node;
 mod prelude;
+mod type_inference;
 
 use lang_gen::{
-    Container, ContainerDef, Enum, Impl, ImplInstruction, IntoCompleted, Struct, TyConstuctor,
-    TyConstuctorIncomplete, TyName, TypeDef,
+    Container, ContainerDef, Enum, Impl, ImplInstruction, Struct, TyConstuctor,
+    TyConstuctorIncomplete, TyName,
 };
-use node::{Field, TypeIdent};
-
-use crate::node::Node;
+use node::{Field, Node, TypeIdent};
 
 #[derive(Default, Clone)]
 struct RenameTable<T>(HashMap<TypeIdent, Cow<'static, str>>, T)
@@ -98,7 +97,7 @@ fn make_node_id_set(ids: &[u16]) -> String {
 }
 
 // TODO: Roll this into TypeDef?
-type TyDefBare = (
+pub type TyDefBare = (
     ContainerDef<TyConstuctorIncomplete>,
     Vec<Impl<TyConstuctorIncomplete>>,
     Vec<&'static str>,
@@ -222,9 +221,9 @@ fn build_field_type<'a>(
     }
 }
 
-fn main() {
-    const DEBUG: bool = false;
+pub const DEBUG: bool = false;
 
+fn main() {
     let lang = tree_sitter_rust::language();
 
     let mut nodes = serde_json::from_str::<Vec<Node>>(tree_sitter_rust::NODE_TYPES).unwrap();
@@ -574,124 +573,13 @@ fn main() {
         continue;
     }
 
-    let mut declarations_incomplete: BTreeMap<TyName, TyDefBare> =
-        declarations.into_iter().collect();
-    let mut declarations_partial_completed: BTreeMap<
-        TyName,
-        (
-            ContainerDef<TyConstuctor>,
-            Vec<Impl<TyConstuctorIncomplete>>,
-            Vec<&'static str>,
-        ),
-    > = BTreeMap::new();
-    let mut checking_stack: Vec<TyName> = vec![];
-
-    loop {
-        let ty_name = match checking_stack.as_slice() {
-            [front @ .., ty_name] => {
-                if let Some(_ty) = front.iter().find(|x| ty_name.eq(x)) {
-                    for stack in checking_stack.iter() {
-                        println!("- {}", stack);
-                    }
-
-                    todo!("Cycle found"); // TODO: Handle cycles
-                }
-
-                ty_name.clone()
-            }
-            [] => {
-                if let Some((ty_name, _)) = declarations_incomplete.first_key_value() {
-                    checking_stack.push(ty_name.clone());
-                    ty_name.clone()
-                } else {
-                    break;
-                }
-            }
-        };
-
-        if DEBUG {
-            println!(
-                "// name({}) completed({}) incomplete({})",
-                ty_name,
-                declarations_partial_completed.len(),
-                declarations_incomplete.len()
-            );
-        }
-
-        let ty_def = declarations_incomplete.get_mut(&ty_name).unwrap();
-        match ty_def.0.into_completed() {
-            Ok(completed) => {
-                if DEBUG {
-                    println!("// Ok");
-                }
-
-                let (_, impls, attr) = declarations_incomplete.remove(&ty_name).unwrap();
-                declarations_partial_completed.insert(ty_name.clone(), (completed, impls, attr));
-                checking_stack.pop();
-            }
-            Err(incomplete_ty_def) => {
-                if DEBUG {
-                    println!(
-                        "// Err {} {}",
-                        incomplete_ty_def.primary_type_name(),
-                        ty_name
-                    );
-                }
-
-                let next_ty_name = incomplete_ty_def.primary_type_name().clone();
-
-                if let Some((container, _, _)) = declarations_partial_completed.get(&next_ty_name) {
-                    incomplete_ty_def.lifetime_param =
-                        Some(container.ty_constructor().lifetime_param);
-                } else {
-                    checking_stack
-                        .push(declarations_incomplete.get(&next_ty_name).unwrap().0.name());
-                }
-            }
-        }
-    }
-
-    assert!(declarations_incomplete.is_empty());
-
-    let mut declarations_completed: BTreeMap<TyName, TypeDef<TyConstuctor>> = BTreeMap::new();
-    while let Some(entry) = declarations_partial_completed.first_entry() {
-        let (ty_name, (ty_container, ty_impls, attrs)) = entry.remove_entry();
-
-        let mut ty_def = TypeDef::new(ty_container);
-        attrs.into_iter().for_each(|attr| ty_def.push_attr(attr));
-
-        for mut ty_impl in ty_impls {
-            let f = loop {
-                match ty_impl.into_completed() {
-                    Ok(done) => break done,
-                    Err(partial) => {
-                        let partial_ty_name = partial.primary_type_name();
-                        if partial_ty_name == &ty_name {
-                            partial.lifetime_param = Some(ty_def.ty_constructor().lifetime_param);
-                            continue;
-                        }
-                        if let Some(ty_def) = declarations_completed.get(&partial_ty_name) {
-                            partial.lifetime_param = Some(ty_def.ty_constructor().lifetime_param);
-                            continue;
-                        }
-                        if let Some((ty_container, _ty_impls, _attr)) =
-                            declarations_partial_completed.get(&partial_ty_name)
-                        {
-                            partial.lifetime_param =
-                                Some(ty_container.ty_constructor().lifetime_param);
-                            continue;
-                        }
-
-                        panic!("Type name {} not found", partial_ty_name);
-                    }
-                }
-            };
-            ty_def.push_impl(f);
-        }
-
-        let res = declarations_completed.insert(ty_name, ty_def);
-        assert!(res.is_none());
-    }
+    let declarations_incomplete: BTreeMap<TyName, TyDefBare> = declarations.into_iter().collect();
+    // TypeDef lifetime completion
+    let declarations_partial_completed =
+        type_inference::complete_type_def_generics(declarations_incomplete);
+    // Impl lifetime completion
+    let declarations_completed =
+        type_inference::complete_impl_generics(declarations_partial_completed);
 
     println!("{}", prelude::PRELUDE.trim());
     for (ty_name, ty_def) in declarations_completed {
