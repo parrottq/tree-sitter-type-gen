@@ -211,7 +211,7 @@ where
 impl<'a> DeserializeNode<'a> for () {
     fn deserialize_at_root(
         tree: &mut TreeCursor<'a>,
-        mode: DeserializeMode,
+        _mode: DeserializeMode,
     ) -> Result<Self, DeserializeError> {
         if DEBUG {
             let root_unit_name = core::any::type_name::<Self>();
@@ -223,7 +223,7 @@ impl<'a> DeserializeNode<'a> for () {
     }
 
     fn deserialize_at_current(
-        iter: &mut Peekable<impl Iterator<Item = Node<'a>>>,
+        _iter: &mut Peekable<impl Iterator<Item = Node<'a>>>,
     ) -> Result<Self, DeserializeError> {
         if DEBUG {
             let curr_unit_name = core::any::type_name::<Self>();
