@@ -1,0 +1,12 @@
+[package]
+name = "tree-sitter-type-gen-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tree-sitter = "0.20.10"
+tree-sitter-rust = "0.20.3"
+
+[build-dependencies]
+tree-sitter-rust = "0.20.3"
+tree-sitter-type-gen = { path = "../.." }

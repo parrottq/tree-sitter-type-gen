@@ -1,5 +1,4 @@
 pub const PRELUDE: &str = r#"
-#![allow(non_camel_case_types)]
 use core::iter::Peekable;
 use tree_sitter::{Node, TreeCursor};
 

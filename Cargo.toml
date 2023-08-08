@@ -12,4 +12,4 @@ syn = "2.0.28"
 tree-sitter = "0.20.10"
 
 [workspace]
-members = ["bin/*"]
+members = ["bin/*", "grammars/*"]

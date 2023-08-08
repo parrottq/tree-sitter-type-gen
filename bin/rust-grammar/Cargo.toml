@@ -5,5 +5,4 @@ edition = "2021"
 
 [dependencies]
 tree-sitter-type-gen = { path = "../../" }
-
 tree-sitter-rust = "0.20.3"
