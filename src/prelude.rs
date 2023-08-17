@@ -147,7 +147,6 @@ where
 
     if iter.peek().is_some() {
         let res = T::deserialize_at_current(&mut iter)?;
-        debug_assert!(iter.next().is_none(), "Other node on the tree");
         Ok(res)
     } else {
         result_on_empty()
