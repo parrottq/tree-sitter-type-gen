@@ -87,7 +87,7 @@ impl fmt::Display for Enum<TyConstuctor> {
                 }
             )?;
         }
-        writeln!(f, "}}")?;
+        write!(f, "}}")?;
         Ok(())
     }
 }
