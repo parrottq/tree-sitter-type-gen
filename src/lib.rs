@@ -456,6 +456,26 @@ fn build(build_opts: GeneratorBuilder) -> String {
         let node_ty: TyConstuctorIncomplete =
             TyConstuctor::new_simple(TyName::new("Node".into()), Cow::Borrowed(&['a'])).into();
 
+        let node_container_ty =
+            TyConstuctor::new_simple(TyName::new("NodeContainer".into()), Cow::Borrowed(&['a']))
+                .into();
+
+        let node_container_parts = Impl::new(
+            [
+                "impl".into(),
+                ImplInstruction::DeclareLifetimes,
+                " ".into(),
+                ImplInstruction::TyConstructor(node_container_ty),
+                " for ".into(),
+                ImplInstruction::SelfType,
+                " { ".into(),
+                "fn upcast(&self) -> ".into(),
+                ImplInstruction::TyConstructor(node_ty.clone()),
+                " { self.0 } }".into(),
+            ]
+            .to_vec(),
+        );
+
         let generic_node_ty =
             TyConstuctor::new_simple(TyName::new("GenericNode".into()), Cow::Borrowed(&['a']))
                 .into();
@@ -490,11 +510,7 @@ fn build(build_opts: GeneratorBuilder) -> String {
             }.into(),
             " where T: DeserializeNode<'a>; type Child = ".into(),
             ImplInstruction::TyConstructor(child_ty.0.strip_decorators()),
-            "; fn inner_node(&self) -> &".into(),
-            ImplInstruction::TyConstructor(node_ty.clone()),
-            " { &self.0 } fn inner_node_mut(&mut self) -> &mut ".into(),
-            ImplInstruction::TyConstructor(node_ty.clone()),
-            " { &mut self.0 } fn downcast(value: ".into(),
+            "; fn downcast(value: ".into(),
             ImplInstruction::TyConstructor(node_ty.clone()),
             ") -> Result<Self, ".into(),
             ImplInstruction::TyConstructor(node_ty.clone()),
@@ -517,7 +533,11 @@ fn build(build_opts: GeneratorBuilder) -> String {
 
         // TODO: Implement literal marker trait
         // TODO: Implement GenericNode downcast (and specialized literal downcast)
-        impls.extend([generic_node_parts, deserialize_node_parts]);
+        impls.extend([
+            node_container_parts,
+            generic_node_parts,
+            deserialize_node_parts,
+        ]);
 
         let attr = vec![
             format!(

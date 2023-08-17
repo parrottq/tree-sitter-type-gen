@@ -4,8 +4,12 @@ use tree_sitter::{Node, TreeCursor};
 
 const DEBUG: bool = false;
 
+pub trait NodeContainer<'a> {
+    fn upcast(&self) -> Node<'a>;
+}
+
 /// Marks a structure that represents a single node kind. Theses structures contain a single [Node].
-pub trait GenericNode<'a>
+pub trait GenericNode<'a>: NodeContainer<'a>
 where
     Self::Child: DeserializeNode<'a>,
     Self::Container<Self::Child>: DeserializeNode<'a>,
@@ -22,8 +26,6 @@ where
     where
         T: DeserializeNode<'a>;
 
-    fn inner_node(&self) -> &Node<'a>;
-    fn inner_node_mut(&mut self) -> &mut Node<'a>;
     fn downcast(value: Node<'a>) -> Result<Self, Node<'a>>
     where
         Self: Sized;
@@ -33,7 +35,7 @@ where
         &self,
     ) -> Result<Self::Container<NodeOrAny<'a, Self::Child>>, DeserializeError> {
         Self::Container::<NodeOrAny<Self::Child>>::deserialize_at_root(
-            &mut self.inner_node().walk(),
+            &mut self.upcast().walk(),
             DeserializeMode::AllChildren,
         )
     }
@@ -41,7 +43,7 @@ where
     /// Return all named children of the current node.
     fn children_named(&self) -> Result<Self::Container<Self::Child>, DeserializeError> {
         Self::Container::<Self::Child>::deserialize_at_root(
-            &mut self.inner_node().walk(),
+            &mut self.upcast().walk(),
             DeserializeMode::NamedChildren,
         )
     }
@@ -52,7 +54,7 @@ where
         field_id: u16,
     ) -> Result<Vec<Self::Child>, DeserializeError> {
         Vec::<Self::Child>::deserialize_at_root(
-            &mut self.inner_node().walk(),
+            &mut self.upcast().walk(),
             DeserializeMode::Field(field_id),
         )
     }
