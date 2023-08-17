@@ -10,7 +10,8 @@ fn main() {
     let nodes = tree_sitter_rust::NODE_TYPES;
 
     let output = GeneratorBuilder::new(lang, nodes)
-        .add_extras([ // Extras taken from `grammar.js`
+        .add_extras([
+            // Extras taken from `grammar.js`
             TypeIdent::new("line_comment", true),
             TypeIdent::new("block_comment", true),
         ])
