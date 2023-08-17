@@ -88,6 +88,48 @@ fn build_variant_type<'a>(
         assert!(res.is_none());
     }
 
+    let node_ty: TyConstuctorIncomplete =
+        TyConstuctor::new_simple(TyName::new("Node".into()), Cow::Borrowed(&['a'])).into();
+
+    let node_container_ty =
+        TyConstuctor::new_simple(TyName::new("NodeContainer".into()), Cow::Borrowed(&['a'])).into();
+
+    let node_container_parts = Impl::new({
+        let front_parts = [
+            "impl".into(),
+            ImplInstruction::DeclareLifetimes,
+            " ".into(),
+            ImplInstruction::TyConstructor(node_container_ty),
+            " for ".into(),
+            ImplInstruction::SelfType,
+            " { ".into(),
+            "fn upcast(&self) -> ".into(),
+            ImplInstruction::TyConstructor(node_ty.clone()),
+            " { match self { ".into(),
+        ];
+
+        let variant_function_parts = subtypes
+            .iter()
+            .map(|variant_name| {
+                let variant_name = ty_rename_table.rename(variant_name).to_string();
+
+                [
+                    ty_name.as_ref().to_owned().into(),
+                    "::".into(),
+                    variant_name.clone().into(),
+                    "(inner) => inner.upcast(), ".into(),
+                ]
+            })
+            .flatten();
+
+        let back_parts = ["} } }".into()];
+        front_parts
+            .into_iter()
+            .chain(variant_function_parts)
+            .chain(back_parts.into_iter())
+            .collect()
+    });
+
     let deserialize_node_parts = Impl::new({
         let deserialize_node_ty =
             TyConstuctor::new_simple(TyName::new("DeserializeNode".into()), Cow::Borrowed(&['a']))
@@ -137,7 +179,7 @@ fn build_variant_type<'a>(
             variants,
         }
         .into(),
-        vec![deserialize_node_parts],
+        vec![node_container_parts, deserialize_node_parts],
         vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]".into()],
     )
 }
