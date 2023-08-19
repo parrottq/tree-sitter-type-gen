@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 tree-sitter = "0.20.10"
 tree-sitter-rust = "0.20.3"
+thiserror = { version = "1.0", optional = true }
+
+[features]
+thiserror = ["dep:thiserror"]
 
 [build-dependencies]
 tree-sitter-rust = "0.20.3"

@@ -62,10 +62,16 @@ where
 
 /// Error type when turning [Node] into a [GenericNode] fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
 pub enum DeserializeError {
     /// The current node has no children (when children where expected).
+    #[cfg_attr(feature = "thiserror", error("No child node present"))]
     NoChild,
     /// The [Node::kind_id] of one of the [Node] was wrong.
+    #[cfg_attr(
+        feature = "thiserror",
+        error("Wrong node type found (found '{unexpected_kind_id}')")
+    )]
     WrongType { unexpected_kind_id: u16 },
 }
 
