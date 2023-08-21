@@ -153,9 +153,7 @@ fn build_variant_type<'a>(
                 let variant_name = ty_rename_table.rename(variant_name).to_string();
 
                 [
-                    "|iter| Ok(".into(),
-                    ty_name.as_ref().to_owned().into(),
-                    "::".into(),
+                    "|iter| Ok(Self::".into(),
                     variant_name.clone().into(),
                     "(".into(),
                     variant_name.into(),
