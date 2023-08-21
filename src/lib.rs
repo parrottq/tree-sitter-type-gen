@@ -171,14 +171,54 @@ fn build_variant_type<'a>(
             .collect()
     });
 
+    let debug_parts = Impl::new({
+        let debug_ty = TyConstuctor::new_simple(
+            TyName::new("core::fmt::Debug".into()),
+            Cow::Owned(Vec::new()),
+        )
+        .into();
+
+        let front_parts = [
+            "impl".into(),
+            ImplInstruction::DeclareLifetimes,
+            " ".into(),
+            ImplInstruction::TyConstructor(debug_ty),
+            " for ".into(),
+            ImplInstruction::SelfType,
+            "{ fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { match self { "
+                .into(),
+        ];
+
+        let variant_function_parts = subtypes
+            .iter()
+            .map(|variant_name| {
+                let variant_name = ty_rename_table.rename(variant_name).to_string();
+
+                [
+                    "Self::".into(),
+                    variant_name.into(),
+                    "(inner) => inner.fmt(f), ".into(),
+                ]
+            })
+            .flatten();
+
+        let back_part = ["} } }".into()];
+
+        front_parts
+            .into_iter()
+            .chain(variant_function_parts)
+            .chain(back_part.into_iter())
+            .collect()
+    });
+
     (
         Enum {
             name: ty_name.clone(),
             variants,
         }
         .into(),
-        vec![node_container_parts, deserialize_node_parts],
-        vec!["#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]".into()],
+        vec![node_container_parts, deserialize_node_parts, debug_parts],
+        vec!["#[derive(Clone, Copy, Hash, PartialEq, Eq)]".into()],
     )
 }
 
