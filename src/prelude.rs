@@ -4,8 +4,15 @@ use tree_sitter::{Node, TreeCursor};
 
 const DEBUG: bool = false;
 
+/// Stucture that contains exactly one [Node]. Typed nodes implement this.
 pub trait NodeContainer<'a> {
     fn upcast(&self) -> Node<'a>;
+}
+
+impl<'a> NodeContainer<'a> for Node<'a> {
+    fn upcast(&self) -> Node<'a> {
+        *self
+    }
 }
 
 /// Marks a structure that represents a single node kind. Theses structures contain a single [Node].
