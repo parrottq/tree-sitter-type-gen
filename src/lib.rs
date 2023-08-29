@@ -644,8 +644,88 @@ fn build(build_opts: GeneratorBuilder) -> String {
 
     let declarations_incomplete: BTreeMap<TyName, TyDefBare> = declarations.into_iter().collect();
     // TypeDef lifetime completion
-    let declarations_partial_completed =
+    let mut declarations_partial_completed =
         type_inference::complete_type_def_generics(declarations_incomplete);
+
+    let enums: Vec<_> = declarations_partial_completed
+        .iter()
+        .filter_map(|(_name, def)| match &def.0 {
+            ContainerDef::Struct(_struct_container) => None,
+            ContainerDef::Enum(enum_container) => Some(enum_container),
+        })
+        .collect();
+    let mut from_impls_bank = BTreeMap::new();
+
+    // Add From impls
+    for outer_enum in enums.iter() {
+        let outer_set: BTreeSet<_> = outer_enum.variants.keys().collect();
+        let mut from_impls: Vec<Impl<TyConstuctorIncomplete>> = vec![];
+
+        for inner_enum in enums.iter() {
+            if inner_enum.name == outer_enum.name {
+                continue;
+            }
+
+            let inner_set: BTreeSet<_> = inner_enum.variants.keys().collect();
+
+            // Only add from if all the variants are present in the other enum type
+            let diff: Vec<_> = inner_set.difference(&outer_set).collect();
+            if diff.len() == 0 {
+                let from_ty = TyConstuctorIncomplete::new_simple(inner_enum.name());
+
+                let impl_parts_match = inner_enum
+                    .variants
+                    .iter()
+                    .map(|(name, _)| {
+                        [
+                            format!("{}", inner_enum.name()).into(),
+                            "::".into(),
+                            format!("{}", name).into(),
+                            "(inner) => Self::".into(),
+                            format!("{}", name).into(),
+                            "(inner), ".into(),
+                        ]
+                    })
+                    .flatten();
+
+                let impl_parts_front = [
+                    "impl".into(),
+                    ImplInstruction::DeclareLifetimes,
+                    " From<".into(),
+                    ImplInstruction::TyConstructor(from_ty.clone()),
+                    "> for ".into(),
+                    ImplInstruction::SelfType,
+                    " { fn from(value: ".into(),
+                    ImplInstruction::TyConstructor(from_ty),
+                    ") -> Self { match value { ".into(),
+                ];
+
+                let impl_parts_back = ["} } }".into()];
+
+                from_impls.push(Impl::new(
+                    impl_parts_front
+                        .into_iter()
+                        .chain(impl_parts_match.into_iter())
+                        .chain(impl_parts_back)
+                        .collect(),
+                ));
+            }
+        }
+
+        if !from_impls.is_empty() {
+            let res = from_impls_bank.insert(outer_enum.name(), from_impls);
+            assert!(res.is_none());
+        }
+    }
+
+    for (ty_name, from_impl) in from_impls_bank {
+        declarations_partial_completed
+            .get_mut(&ty_name)
+            .unwrap()
+            .1
+            .extend(from_impl);
+    }
+
     // Impl lifetime completion
     let declarations_completed =
         type_inference::complete_impl_generics(declarations_partial_completed);
