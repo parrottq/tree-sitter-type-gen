@@ -647,10 +647,14 @@ fn build(build_opts: GeneratorBuilder) -> String {
     let mut declarations_partial_completed =
         type_inference::complete_type_def_generics(declarations_incomplete);
 
+    let mut structs = BTreeSet::new();
     let enums: Vec<_> = declarations_partial_completed
         .iter()
-        .filter_map(|(_name, def)| match &def.0 {
-            ContainerDef::Struct(_struct_container) => None,
+        .filter_map(|(name, def)| match &def.0 {
+            ContainerDef::Struct(_struct_container) => {
+                structs.insert(name);
+                None
+            }
             ContainerDef::Enum(enum_container) => Some(enum_container),
         })
         .collect();
@@ -661,6 +665,25 @@ fn build(build_opts: GeneratorBuilder) -> String {
         let outer_set: BTreeSet<_> = outer_enum.variants.keys().collect();
         let mut from_impls: Vec<Impl<TyConstuctorIncomplete>> = vec![];
 
+        // Add From impls for the struct contained in each variant
+        for struct_ty in outer_set.intersection(&structs).copied() {
+            let from_ty = TyConstuctorIncomplete::new_simple(struct_ty.clone());
+            from_impls.push(Impl::new(vec![
+                "impl".into(),
+                ImplInstruction::DeclareLifetimes,
+                " From<".into(),
+                ImplInstruction::TyConstructor(from_ty.clone()),
+                "> for ".into(),
+                ImplInstruction::SelfType,
+                " { fn from(value: ".into(),
+                ImplInstruction::TyConstructor(from_ty),
+                ") -> Self { Self::".into(),
+                format!("{}", struct_ty).into(),
+                "(value) } }".into(),
+            ]));
+        }
+
+        // Add From impls if any enums contain variants of another enum
         for inner_enum in enums.iter() {
             if inner_enum.name == outer_enum.name {
                 continue;
