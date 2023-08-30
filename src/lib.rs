@@ -102,8 +102,7 @@ fn build_variant_type<'a>(
             ImplInstruction::TyConstructor(node_container_ty),
             " for ".into(),
             ImplInstruction::SelfType,
-            " { ".into(),
-            "fn upcast(&self) -> ".into(),
+            " { #[inline] fn upcast(&self) -> ".into(),
             ImplInstruction::TyConstructor(node_ty.clone()),
             " { match self { ".into(),
         ];
@@ -548,8 +547,7 @@ fn build(build_opts: GeneratorBuilder) -> String {
                 ImplInstruction::TyConstructor(node_container_ty),
                 " for ".into(),
                 ImplInstruction::SelfType,
-                " { ".into(),
-                "fn upcast(&self) -> ".into(),
+                " { #[inline] fn upcast(&self) -> ".into(),
                 ImplInstruction::TyConstructor(node_ty.clone()),
                 " { self.0 } }".into(),
             ]
