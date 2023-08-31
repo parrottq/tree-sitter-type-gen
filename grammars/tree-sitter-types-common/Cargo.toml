@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 tree-sitter = "0.20.10"
+thiserror = { version = "1.0", optional = true }
+
+[features]
+thiserror = ["dep:thiserror"]
