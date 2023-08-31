@@ -7,6 +7,11 @@ const DEBUG: bool = false;
 /// Stucture that contains exactly one [Node]. Typed nodes implement this.
 pub trait NodeContainer<'a> {
     fn upcast(&self) -> Node<'a>;
+
+    fn str_text<'text>(&self, source: &'text str) -> &'text str {
+        // 'str' should only contain valid utf8
+        self.upcast().utf8_text(source.as_bytes()).unwrap()
+    }
 }
 
 impl<'a> NodeContainer<'a> for Node<'a> {
