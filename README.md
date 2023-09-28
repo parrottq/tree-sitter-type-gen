@@ -2,7 +2,7 @@
 
 Tired of having to refer to tree-sitter's `grammar.js` to find out which nodes go where? tree-sitter-type-gen will generate Rust type definitions for you!
 
-# Usage
+## Usage
 
 Example generated for the `tree-sitter-rust` grammar.
 ```rust
@@ -40,14 +40,14 @@ fn main() {
 }
 ```
 
-# Setting Up a Custom tree-sitter Grammar
+## Setting Up a Custom tree-sitter Grammar
 
 _Disclaimer: This crate was specifically built and tested on the Rust grammar_
 
 Creating a binding crate for any tree-sitter grammar should be relatively straight forward. Check `grammars/tree-sitter-type-gen-rust` for a template.
 
 
-# How it Works
+## How it Works
 tree-sitter generates a static type information file call `node-types.json`. That information is used by a build script to generate the Rust types. This files has a few caviates that need to be worked around:
 1. Node kind ids are not store in this file so a runtime language object is needed to embed them.
 2. `extras` are not part of this file (you can find them in `grammar.js`)
